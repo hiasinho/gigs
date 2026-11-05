@@ -169,7 +169,7 @@ test("update, heartbeat, defer and comments through the real CLI", async () => {
   expect(await json(["heartbeat", task.id])).toMatchObject({ claimed_by: "agent-1" });
   const stolen = await run(["heartbeat", task.id, "--as", "agent-2"]);
   expect(stolen.code).toBe(1);
-  expect(stolen.stderr).toContain(`${task.id} is already claimed by agent-1 (until`);
+  expect(stolen.stderr).toBe(`error: ${task.id} is claimed by agent-1, not agent-2; only the holder can heartbeat\n`);
 
   expect(await json(["comment", task.id, "halfway", "there"])).toMatchObject({ boon_id: task.id, author: "agent-1", body: "halfway there" });
   await json(["comment", task.id, "-"], { stdin: "multi\nline\n", env: { BN_ACTOR: "agent-2" } });
@@ -193,6 +193,11 @@ test("update, heartbeat, defer and comments through the real CLI", async () => {
   const day = await json(["defer", task.id, "--until", "2999-03-04"]);
   expect(day.defer_until).toBe(new Date(2999, 2, 4).toISOString());
   expect((await run(["defer", task.id, "--until", "2999-02-30"])).stderr).toBe("error: invalid date: 2999-02-30\n");
+  // An ISO date-time without an offset is local time, like a plain date.
+  const local = await json(["defer", task.id, "--until", "2999-03-04T10:30"]);
+  expect(local.defer_until).toBe(new Date(2999, 2, 4, 10, 30).toISOString());
+  expect((await json(["defer", task.id, "--until", "2999-03-04T10:30:15"])).defer_until).toBe(new Date(2999, 2, 4, 10, 30, 15).toISOString());
+  expect((await run(["defer", task.id, "--until", "2999-02-30T10:00"])).stderr).toBe("error: invalid date: 2999-02-30T10:00\n");
   expect(await json(["defer", task.id])).toMatchObject({ status: "deferred", defer_until: null });
   expect((await run(["undefer", task.id])).stdout).toBe(`undeferred ${task.id}\n`);
   expect((await json(["ready"])).map((b: any) => b.id)).toEqual([task.id, epic.id]);

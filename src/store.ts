@@ -436,7 +436,9 @@ export class Store {
       actor = checkActor(actor);
       const boon = this.mustGet(id);
       if (boon.status !== "in_progress") throw conflict(`${boon.id} is not claimed (status ${boon.status})`);
-      if (boon.claimed_by !== actor) throw claimedBy(boon);
+      if (boon.claimed_by !== actor) {
+        throw conflict(`${boon.id} is claimed by ${boon.claimed_by}, not ${actor}; only the holder can heartbeat`, "claimed");
+      }
       return this.renew(boon.id);
     });
   }

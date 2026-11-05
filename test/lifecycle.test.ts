@@ -94,7 +94,7 @@ describe("claim expiry", () => {
     const beat = store.heartbeat(id, "alice");
     expect(beat).toMatchObject({ claimed_by: "alice", claimed_at: T0, claim_expires_at: at(50) });
     const err = error(() => store.heartbeat(id, "bob"), "claimed");
-    expect(err.message).toBe(`${id} is already claimed by alice (until ${at(50)})`);
+    expect(err.message).toBe(`${id} is claimed by alice, not bob; only the holder can heartbeat`);
     minutes(30);
     error(() => store.heartbeat(id, "alice"), "conflict");
   });

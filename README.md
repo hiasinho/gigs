@@ -61,7 +61,8 @@ exec bun "$HOME/src/boons/src/cli.ts" "$@"
 ```
 
 If you manage Bun with mise, pin the version in the launcher instead:
-`exec "$HOME/.local/bin/mise" exec bun@1.4 -C "$HOME/src/boons" -- bun "$HOME/src/boons/src/cli.ts" "$@"`.
+`exec "$HOME/.local/bin/mise" exec bun@1.4 -- bun "$HOME/src/boons/src/cli.ts" "$@"`.
+Don't add `-C <checkout>`: `bn` must run in the caller's directory to find its `.boons.json`.
 
 Client environment:
 

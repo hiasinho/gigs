@@ -429,14 +429,16 @@ async function readText(value: string | undefined): Promise<string | undefined> 
   return value === "-" ? (await Bun.stdin.text()).trimEnd() : value;
 }
 
-/** A relative duration like 30m, 4h or 2d becomes an ISO time; anything else goes to the server as is. */
+/** A relative duration like 30m, 4h or 2d, a plain date, or a local date-time becomes an ISO time; anything else goes to the server as is. */
 function parseUntil(s: string): string {
-  const date = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s.trim());
+  const date = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}))?)?$/.exec(s.trim());
   if (date) {
-    // A plain date means the start of that day in local time.
-    const [y, mo, d] = date.slice(1).map(Number) as [number, number, number];
-    const t = new Date(y, mo - 1, d);
-    if (t.getFullYear() !== y || t.getMonth() !== mo - 1 || t.getDate() !== d) throw new Error(`invalid date: ${s}`);
+    // A plain date (start of day) or a date-time without an offset means local time.
+    const [y, mo, d, h = 0, mi = 0, sec = 0] = date.slice(1).map((v) => (v === undefined ? undefined : Number(v))) as number[];
+    const t = new Date(y!, mo! - 1, d, h, mi, sec);
+    if (t.getFullYear() !== y || t.getMonth() !== mo! - 1 || t.getDate() !== d || t.getHours() !== h || t.getMinutes() !== mi) {
+      throw new Error(`invalid date: ${s}`);
+    }
     return t.toISOString();
   }
   const m = /^(\d+)([mhd])$/.exec(s.trim());
