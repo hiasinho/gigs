@@ -40,7 +40,8 @@ test("readiness inherits blockers across two ancestors, even closed ancestors; c
   expect(store.blocked("bn").map((e) => e.boon.id)).toEqual([root.id, mid.id, leaf.id]);
   const err = error(() => store.claim(leaf.id, "a"), "not_ready");
   expect(err.reasons).toEqual(store.getDetail(leaf.id).reasons);
-  expect(err.message).toContain(blocker.id);
+  expect(err.message).toContain(`inherits blocker ${blocker.id} via ${root.id}`);
+  expect(err.message).not.toContain('[{"');
   store.close(root.id, "a", undefined, true);
   expect(store.getDetail(leaf.id).ready).toBe(false);
   store.close(blocker.id, "a");

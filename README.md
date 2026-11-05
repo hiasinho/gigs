@@ -124,7 +124,7 @@ bn update <id> [--title t] [-d desc|-] [-t type] [-p n] [--parent id|none]
 bn dep add|rm <id> <target-id> [--kind blocks|related|discovered-from]   # default: target blocks id
 bn claim [id]                     bn unclaim <id>                        bn heartbeat <id>
 bn close <id...> [-r reason] [--force]                                   bn reopen <id>
-bn defer <id> [--until <ISO time|30m|4h|2d>]                             bn undefer <id>
+bn defer <id> [--until <ISO time|YYYY-MM-DD|30m|4h|2d>]                             bn undefer <id>
 bn comment <id> <text|->
 ```
 

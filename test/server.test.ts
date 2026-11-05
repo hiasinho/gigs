@@ -28,6 +28,21 @@ test("health needs no token; everything else does", async () => {
   expect(await res.json()).toEqual({ error: { code: "unauthorized", message: "missing or invalid token" } });
 });
 
+test("malformed URL escapes authenticate first, then return JSON bad_request", async () => {
+  for (const path of ["/boons/%ZZ", "/boons/%E0%A4%A"]) {
+    expect((await call("GET", path, { token: null })).status).toBe(401);
+    const res = await call("GET", path);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: { code: "bad_request" } });
+  }
+});
+
+test("claim TTL must be finite and representable as a Date", () => {
+  for (const value of ["Infinity", "1e300", "1e10"]) {
+    expect(() => configFromEnv({ BOONS_CLAIM_TTL_MINUTES: value })).toThrow();
+  }
+});
+
 test("mutations require an actor", async () => {
   const res = await call("POST", "/projects", { body: JSON.stringify({ prefix: "bn" }) });
   expect(res.status).toBe(400);
@@ -61,6 +76,35 @@ test("create, list with filters, detail, claim conflict", async () => {
   expect(detail).toMatchObject({ boon: { id, claimed_by: "a" }, ready: false, reasons: [] });
   const open = (await (await call("GET", "/projects/bn/boons?status=open,in_progress")).json()) as any[];
   expect(open).toHaveLength(2);
+});
+
+test("auth and actor requirements cover all mutation routes, including errors", async () => {
+  const routes: [string, string][] = [
+    ["POST", "/projects"], ["POST", "/projects/bn/boons"], ["POST", "/projects/bn/claim"],
+    ["PATCH", "/boons/bn-1"], ["POST", "/boons/bn-1/links"],
+    ["DELETE", "/boons/bn-1/links/related/bn-2"], ["POST", "/missing"],
+    ...["claim", "unclaim", "close", "reopen", "heartbeat", "defer", "undefer", "comments"]
+      .map((action): [string, string] => ["POST", "/boons/bn-1/" + action]),
+  ];
+  for (const [method, path] of routes) {
+    expect((await call(method, path, { token: null })).status).toBe(401);
+    expect((await call(method, path)).status).toBe(400);
+  }
+  expect((await call("GET", "/missing", { token: null })).status).toBe(401);
+  expect((await call("PUT", "/boons/bn-1", { actor: "a" })).status).toBe(404);
+});
+
+test("encoded case-insensitive IDs and JSON object validation", async () => {
+  store.createProject("ur");
+  const boon = store.createBoon("ur", "fixture", { title: "encoded" });
+  const detail = await call("GET", "/boons/%55%52%2D1");
+  expect(detail.status).toBe(200);
+  expect(await detail.json()).toMatchObject({ boon: { id: boon.id } });
+  for (const body of ["null", "[]", "42", '"text"', "{nope"]) {
+    const res = await call("POST", "/projects/ur/boons", { body, actor: "a" });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: { code: "bad_request" } });
+  }
 });
 
 test("config from env", () => {

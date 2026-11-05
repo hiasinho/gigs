@@ -84,6 +84,13 @@ describe("create boon", () => {
     expect(store.createBoon("bn", "a", { title: "x" }).id).toBe("bn-1");
   });
 
+  test("explicit null is not a default for non-nullable fields", () => {
+    for (const input of [{ description: null }, { type: null }, { priority: null }]) {
+      expectError(() => store.createBoon("bn", "a", { title: "x", ...input }), "bad_request", 400);
+    }
+    expect(store.createBoon("bn", "a", { title: "valid" }).id).toBe("bn-1");
+  });
+
   test("ids are matched case-insensitively", () => {
     store.createBoon("bn", "a", { title: "x" });
     expect(store.getBoon(" BN-1 ").id).toBe("bn-1");

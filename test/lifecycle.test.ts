@@ -108,8 +108,10 @@ describe("claim expiry", () => {
     expect(store.close(b.id, "alice").claim_expires_at).toBeNull();
   });
 
-  test("the claim TTL must be positive", () => {
-    expect(() => new Store({ path, claimTtlMinutes: 0 })).toThrow();
+  test("the claim TTL must be positive, finite and representable", () => {
+    for (const claimTtlMinutes of [0, Infinity, 1e300, 1e10]) {
+      expect(() => new Store({ path, claimTtlMinutes })).toThrow();
+    }
   });
 });
 
@@ -148,6 +150,27 @@ describe("defer", () => {
     for (const bad of ["soon", T0, at(-1), 42, "+100000-01-01T00:00:00Z"]) error(() => store.defer(id, "a", bad), "bad_request", 400);
     store.close(id, "a");
     error(() => store.defer(id, "a"), "conflict");
+  });
+
+  test("until requires an ISO timestamp with a valid calendar date", () => {
+    const { id } = create("x");
+    for (const bad of ["2999", "January 1, 2999", "2999-02-30T00:00:00Z"]) {
+      error(() => store.defer(id, "a", bad), "bad_request", 400);
+    }
+    expect(store.getBoon(id).status).toBe("open");
+    expect(store.defer(id, "a", "2028-02-29T12:30:00+02:30").defer_until).toBe("2028-02-29T10:00:00.000Z");
+  });
+
+  test("claimNext wakes deferred ancestors and descendants in the same operation", () => {
+    const root = create("root", { priority: 0 });
+    const mid = create("mid", { parent: root.id });
+    const leaf = create("leaf", { parent: mid.id });
+    store.defer(root.id, "a", at(5));
+    store.defer(leaf.id, "a", at(5));
+    expect(store.claimNext("bn", "worker")).toBeNull();
+    minutes(5);
+    expect(store.claimNext("bn", "worker")).toMatchObject({ id: leaf.id, status: "in_progress", defer_until: null });
+    expect(store.getBoon(root.id)).toMatchObject({ status: "open", defer_until: null });
   });
 
   test("a deferred parent keeps its descendants from being ready until it wakes", () => {

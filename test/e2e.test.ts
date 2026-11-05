@@ -190,6 +190,9 @@ test("update, heartbeat, defer and comments through the real CLI", async () => {
   expect((await run(["show", task.id])).stdout).toContain(`deferred:  until ${deferred.defer_until}`);
   expect((await run(["defer", task.id, "--until", "2001-01-01T00:00:00Z"])).stderr).toBe("error: until must be in the future\n");
   expect(await json(["defer", task.id, "--until", "2999-01-01T00:00:00Z"])).toMatchObject({ defer_until: "2999-01-01T00:00:00.000Z" });
+  const day = await json(["defer", task.id, "--until", "2999-03-04"]);
+  expect(day.defer_until).toBe(new Date(2999, 2, 4).toISOString());
+  expect((await run(["defer", task.id, "--until", "2999-02-30"])).stderr).toBe("error: invalid date: 2999-02-30\n");
   expect(await json(["defer", task.id])).toMatchObject({ status: "deferred", defer_until: null });
   expect((await run(["undefer", task.id])).stdout).toBe(`undeferred ${task.id}\n`);
   expect((await json(["ready"])).map((b: any) => b.id)).toEqual([task.id, epic.id]);
@@ -214,6 +217,29 @@ test("show prints every relation on its own indented line, with numeric ordering
   const human = await bn(["show", "sh-2"]);
   expect(human.code).toBe(0);
   expect(human.stdout).toContain(`parent:\n  sh-1  open  Boon 1\nchildren:\n  sh-3  closed  Boon 3\n  sh-10  open  Boon 10\nblockers:\n  sh-4  open  Boon 4\n  sh-11  open  Boon 11\nblocks:\n  sh-5  open  Boon 5\n  sh-12  open  Boon 12\nrelated:\n  sh-6  open  Boon 6\n  sh-13  open  Boon 13\ndiscovered_from:\n  sh-7  open  Boon 7\n  sh-14  open  Boon 14\ndiscovered:\n  sh-8  open  Boon 8\n  sh-15  open  Boon 15\n`);
+});
+
+test("CLI rejects missing global values, unknown global flags and surplus positionals", async () => {
+  for (const args of [["--as"], ["-P"], ["--bogus"], ["claim", "bn-2", "bn-3"], ["show", "bn-2", "extra"], ["ready", "extra"], ["dep", "add", "bn-2", "bn-3", "extra"]]) {
+    const result = await bn(args);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("error:");
+  }
+  expect((await bn(["--as", "early-actor", "--project=bn", "ready", "--json"])).code).toBe(0);
+  expect((await bn(["--json"])).code).toBe(0);
+});
+
+test("not-ready claim errors are readable and API reasons stay structured", async () => {
+  store.createProject("nr");
+  const blocker = store.createBoon("nr", "fixture", { title: "blocker" });
+  const child = store.createBoon("nr", "fixture", { title: "blocked", blocked_by: [blocker.id] });
+  const result = await bn(["claim", child.id]);
+  expect(result.code).toBe(1);
+  expect(result.stderr).toBe("error: " + child.id + " is not ready: blocked by " + blocker.id + "\n");
+  const res = await fetch(new URL("/boons/" + child.id + "/claim", server.url), {
+    method: "POST", headers: { Authorization: "Bearer t0k", "X-Boons-Actor": "fixture" },
+  });
+  expect(await res.json()).toMatchObject({ error: { code: "not_ready", reasons: [{ kind: "blocker", id: blocker.id }] } });
 });
 
 test("errors, help and connection failures", async () => {

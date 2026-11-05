@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { Client, type BoonChangesInput } from "./client";
 import { configFromEnv, serve } from "./server";
-import { BoonsError, type Boon, type BoonDetail, type LinkKind, type Project, type Reason } from "./store";
+import { BoonsError, formatReasons as reasonText, type Boon, type BoonDetail, type LinkKind, type Project } from "./store";
 
 type Options = NonNullable<ParseArgsConfig["options"]>;
 type Values = Record<string, string | boolean | undefined>;
@@ -268,7 +268,7 @@ const COMMANDS: Record<string, Command> = {
     },
   },
   defer: {
-    usage: "defer <id> [--until <ISO time|30m|4h|2d>]",
+    usage: "defer <id> [--until <ISO time|YYYY-MM-DD|30m|4h|2d>]",
     summary: "set a boon aside (clears its claim), optionally until a time",
     options: { until: { type: "string" } },
     async run({ args, values, json, client }) {
@@ -340,6 +340,7 @@ export async function main(argv: string[]) {
   const at = findCommand(argv);
   const name = argv[at];
   if (name === undefined || name === "help") {
+    parseArgs({ args: argv.filter((_, i) => i !== at), options: GLOBAL_OPTIONS, strict: true });
     console.log(usage());
     return;
   }
@@ -362,6 +363,15 @@ export async function main(argv: string[]) {
   if (values.help) {
     console.log(`${wrapHelp(`usage: bn ${command.usage}`, "", "  ")}\n\n${wrapHelp(command.summary, "")}`);
     return;
+  }
+
+  const maxArgs: Record<string, number> = {
+    serve: 0, init: 1, projects: 0, list: 0, ready: 0, blocked: 0,
+    dep: 3, show: 1, update: 1, claim: 1, unclaim: 1, heartbeat: 1,
+    reopen: 1, defer: 1, undefer: 1,
+  };
+  if (parsed.positionals.length > (maxArgs[name] ?? Infinity)) {
+    throw new Error(`too many arguments (see \`bn ${name} --help\`)`);
   }
 
   await command.run({
@@ -421,6 +431,14 @@ async function readText(value: string | undefined): Promise<string | undefined> 
 
 /** A relative duration like 30m, 4h or 2d becomes an ISO time; anything else goes to the server as is. */
 function parseUntil(s: string): string {
+  const date = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s.trim());
+  if (date) {
+    // A plain date means the start of that day in local time.
+    const [y, mo, d] = date.slice(1).map(Number) as [number, number, number];
+    const t = new Date(y, mo - 1, d);
+    if (t.getFullYear() !== y || t.getMonth() !== mo - 1 || t.getDate() !== d) throw new Error(`invalid date: ${s}`);
+    return t.toISOString();
+  }
   const m = /^(\d+)([mhd])$/.exec(s.trim());
   if (!m) return s;
   const ms = Number(m[1]) * { m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as "m" | "h" | "d"];
@@ -444,18 +462,6 @@ function rows(boons: Boon[]): string {
       ].join("  "),
     )
     .join("\n");
-}
-
-function reasonText(reasons: Reason[]): string {
-  const text = (r: Reason) => {
-    switch (r.kind) {
-      case "blocker": return `blocked by ${r.id}`;
-      case "child": return `child ${r.id} unfinished`;
-      case "inherited": return `inherits blocker ${r.id} via ${r.via}`;
-      case "deferred_ancestor": return `ancestor ${r.id} deferred`;
-    }
-  };
-  return reasons.map(text).join("; ");
 }
 
 function showDetail(detail: BoonDetail): string {

@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { BoonsError, Store } from "./store";
+import { BoonsError, Store, validClaimTtl } from "./store";
 
 export interface HandlerOptions {
   token?: string;
@@ -23,16 +23,21 @@ export function createHandler(store: Store, { token }: HandlerOptions = {}) {
 /** Returns the JSON result, or a ready Response when the status is not 200. */
 async function route(store: Store, req: Request, token: string | undefined): Promise<unknown> {
   const url = new URL(req.url);
-  const parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
-  const shape = parts.map((s, i) => (i === 1 ? ":" : s)).join("/");
-  const key = `${req.method} /${shape}`;
-  const param = parts[1] ?? "";
-
-  if (key === "GET /health") return { ok: true };
+  if (req.method === "GET" && url.pathname === "/health") return { ok: true };
 
   if (token && req.headers.get("authorization") !== `Bearer ${token}`) {
     throw new BoonsError("unauthorized", "missing or invalid token", 401);
   }
+
+  let parts: string[];
+  try {
+    parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  } catch {
+    throw new BoonsError("bad_request", "URL path contains invalid percent encoding", 400);
+  }
+  const shape = parts.map((s, i) => (i === 1 ? ":" : s)).join("/");
+  const key = `${req.method} /${shape}`;
+  const param = parts[1] ?? "";
 
   let actor = "";
   if (req.method !== "GET" && req.method !== "HEAD") {
@@ -131,7 +136,7 @@ export function configFromEnv(env: Record<string, string | undefined> = process.
   const port = Number(env.BOONS_PORT ?? 7357);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error(`invalid BOONS_PORT: ${env.BOONS_PORT}`);
   const claimTtlMinutes = Number(env.BOONS_CLAIM_TTL_MINUTES || 60);
-  if (!(claimTtlMinutes > 0)) throw new Error(`invalid BOONS_CLAIM_TTL_MINUTES: ${env.BOONS_CLAIM_TTL_MINUTES}`);
+  if (!validClaimTtl(claimTtlMinutes)) throw new Error(`invalid BOONS_CLAIM_TTL_MINUTES: ${env.BOONS_CLAIM_TTL_MINUTES}`);
   return {
     host: env.BOONS_HOST || "127.0.0.1",
     port,

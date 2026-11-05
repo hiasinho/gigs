@@ -187,7 +187,7 @@ export class Store {
   private ttlMs: number;
 
   constructor({ path, now = () => new Date(), claimTtlMinutes = 60 }: StoreOptions) {
-    if (!(claimTtlMinutes > 0)) throw new Error(`claim TTL must be a positive number of minutes, got ${claimTtlMinutes}`);
+    if (!validClaimTtl(claimTtlMinutes, now().getTime())) throw new Error(`claim TTL must be positive and produce a four-digit-year expiry, got ${claimTtlMinutes}`);
     this.now = now;
     this.ttlMs = claimTtlMinutes * 60_000;
     this.db = new Database(path, { create: true, strict: true });
@@ -238,9 +238,9 @@ export class Store {
       actor = checkActor(actor);
       const p = this.mustGetProject(project);
       const title = checkTitle(input.title);
-      const description = checkDescription(input.description ?? "");
-      const type = checkType(input.type ?? "task");
-      const priority = checkPriority(input.priority ?? 2);
+      const description = checkDescription(input.description === undefined ? "" : input.description);
+      const type = checkType(input.type === undefined ? "task" : input.type);
+      const priority = checkPriority(input.priority === undefined ? 2 : input.priority);
       const parent = input.parent == null ? null : this.reference(input.parent);
       if (input.blocked_by !== undefined && !Array.isArray(input.blocked_by)) {
         throw badRequest("blocked_by must be an array of ids");
@@ -416,7 +416,7 @@ export class Store {
       }
       if (boon.status !== "open") throw conflict(`${boon.id} is ${boon.status} and cannot be claimed`, "not_claimable");
       const { ready, reasons } = this.readiness(boon);
-      if (!ready) throw new BoonsError("not_ready", `${boon.id} is not ready: ${JSON.stringify(reasons)}`, 409, reasons);
+      if (!ready) throw new BoonsError("not_ready", `${boon.id} is not ready: ${formatReasons(reasons)}`, 409, reasons);
       return this.claimBoon(boon.id, actor);
     });
   }
@@ -501,7 +501,7 @@ export class Store {
       if (boon.status === "closed") throw conflict(`${boon.id} is closed and cannot be deferred`);
       let deferUntil: string | null = null;
       if (until !== undefined && until !== null) {
-        const date = typeof until === "string" ? new Date(until) : new Date(NaN);
+        const date = isoTime(until);
         if (isNaN(date.getTime()) || date.getUTCFullYear() > 9999) throw badRequest("until must be an ISO-8601 time");
         if (date <= this.now()) throw badRequest("until must be in the future");
         deferUntil = date.toISOString();
@@ -687,6 +687,33 @@ export class Store {
       .run(actor, now, this.expiry(), now, id);
     return this.mustGet(id);
   }
+}
+
+/** Expiries must remain sortable as four-digit-year ISO timestamps in SQLite. */
+export function validClaimTtl(minutes: number, now = Date.now()): boolean {
+  const expiry = new Date(now + minutes * 60_000);
+  return minutes > 0 && Number.isFinite(minutes) && Number.isFinite(expiry.getTime()) && expiry.getUTCFullYear() <= 9999;
+}
+
+function isoTime(value: unknown): Date {
+  const match = typeof value === "string" && /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/i.exec(value);
+  if (!match) return new Date(NaN);
+  const year = Number(match[1]), month = Number(match[2]), day = Number(match[3]);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (day < 1 || day > (days[month - 1] ?? 0)) return new Date(NaN);
+  return new Date(value as string);
+}
+
+export function formatReasons(reasons: Reason[]): string {
+  return reasons.map((r) => {
+    switch (r.kind) {
+      case "blocker": return "blocked by " + r.id;
+      case "child": return "child " + r.id + " unfinished";
+      case "inherited": return "inherits blocker " + r.id + " via " + r.via;
+      case "deferred_ancestor": return "ancestor " + r.id + " deferred";
+    }
+  }).join("; ");
 }
 
 function claimedBy(boon: Boon) {
