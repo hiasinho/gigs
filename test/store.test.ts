@@ -190,13 +190,28 @@ describe("close and reopen", () => {
 });
 
 describe("migrations", () => {
+  test("upgrades a slice 1 database without losing boons, claims or numbering", () => {
+    const first = store.createBoon("bn", "a", { title: "existing" });
+    store.claim(first.id, "holder");
+    // Reconstruct the exact v1 schema by removing only migration 2's additions.
+    const db = new Database(join(dir, "boons.db"));
+    db.run("DROP TABLE links; DROP INDEX boons_parent; ALTER TABLE boons DROP COLUMN parent; PRAGMA user_version = 1;");
+    db.close();
+    const upgraded = new Store({ path: join(dir, "boons.db") });
+    try {
+      expect(upgraded.getBoon(first.id)).toMatchObject({ title: "existing", parent: null, claimed_by: "holder" });
+      const child = upgraded.createBoon("bn", "a", { title: "child", parent: first.id });
+      expect(child.id).toBe("bn-2");
+      expect(upgraded.getDetail(first.id).children[0]?.id).toBe(child.id);
+    } finally { upgraded.dispose(); }
+  });
   test("set user_version and survive reopening the database", () => {
     store.createBoon("bn", "a", { title: "x" });
     const again = new Store({ path: join(dir, "boons.db") });
     expect(again.getBoon("bn-1").title).toBe("x");
     again.dispose();
     const db = new Database(join(dir, "boons.db"));
-    expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+    expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
     db.close();
   });
 });

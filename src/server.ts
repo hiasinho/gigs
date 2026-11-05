@@ -13,7 +13,7 @@ export function createHandler(store: Store, { token }: HandlerOptions = {}) {
       const result = await route(store, req, token);
       return result instanceof Response ? result : json(result);
     } catch (err) {
-      if (err instanceof BoonsError) return json({ error: { code: err.code, message: err.message } }, err.status);
+      if (err instanceof BoonsError) return json({ error: { code: err.code, message: err.message, ...(err.reasons ? { reasons: err.reasons } : {}) } }, err.status);
       console.error(err);
       return json({ error: { code: "internal", message: "internal server error" } }, 500);
     }
@@ -40,6 +40,10 @@ async function route(store: Store, req: Request, token: string | undefined): Pro
     if (!actor) throw new BoonsError("bad_request", "X-Boons-Actor header is required", 400);
   }
 
+  if (req.method === "DELETE" && parts.length === 5 && parts[0] === "boons" && parts[2] === "links") {
+    return store.removeLink(param, parts[4], parts[3], actor);
+  }
+
   switch (key) {
     case "GET /projects":
       return store.listProjects();
@@ -54,6 +58,7 @@ async function route(store: Store, req: Request, token: string | undefined): Pro
       return store.listBoons(param, {
         status: q.get("status")?.split(",").map((s) => s.trim()).filter(Boolean),
         type: q.get("type") ?? undefined,
+        parent: q.get("parent") ?? undefined,
         all: q.get("all") === "1" || q.get("all") === "true",
       });
     }
@@ -61,6 +66,12 @@ async function route(store: Store, req: Request, token: string | undefined): Pro
       return json(store.createBoon(param, actor, await readBody(req)), 201);
     case "GET /projects/:/ready":
       return store.ready(param);
+    case "GET /projects/:/blocked":
+      return store.blocked(param);
+    case "POST /boons/:/links": {
+      const body = await readBody(req);
+      return store.addLink(param, body.target, body.kind, actor);
+    }
     case "POST /projects/:/claim":
       return store.claimNext(param, actor);
     case "GET /boons/:":
@@ -69,8 +80,10 @@ async function route(store: Store, req: Request, token: string | undefined): Pro
       return store.claim(param, actor);
     case "POST /boons/:/unclaim":
       return store.unclaim(param, actor);
-    case "POST /boons/:/close":
-      return store.close(param, actor, (await readBody(req)).reason);
+    case "POST /boons/:/close": {
+      const body = await readBody(req);
+      return store.close(param, actor, body.reason, body.force);
+    }
     case "POST /boons/:/reopen":
       return store.reopen(param);
   }

@@ -1,4 +1,4 @@
-import { BoonsError, type Boon, type BoonDetail, type Project } from "./store";
+import { BoonsError, type Boon, type BoonDetail, type Project, type Reason } from "./store";
 
 export interface ClientOptions {
   url: string;
@@ -11,12 +11,16 @@ export interface NewBoonInput {
   description?: string;
   type?: string;
   priority?: number | string;
+  parent?: string;
+  blocked_by?: string[];
+  discovered_from?: string;
 }
 
 export interface ListQuery {
   status?: string;
   type?: string;
   all?: boolean;
+  parent?: string;
 }
 
 export class Client {
@@ -42,6 +46,7 @@ export class Client {
     const q = new URLSearchParams();
     if (query.status) q.set("status", query.status);
     if (query.type) q.set("type", query.type);
+    if (query.parent) q.set("parent", query.parent);
     if (query.all) q.set("all", "1");
     const qs = q.size ? `?${q}` : "";
     return this.request<Boon[]>("GET", `/projects/${enc(project)}/boons${qs}`);
@@ -53,6 +58,18 @@ export class Client {
 
   ready(project: string) {
     return this.request<Boon[]>("GET", `/projects/${enc(project)}/ready`);
+  }
+
+  blocked(project: string) {
+    return this.request<{ boon: Boon; reasons: Reason[] }[]>("GET", `/projects/${enc(project)}/blocked`);
+  }
+
+  addLink(id: string, target: string, kind: string) {
+    return this.request<BoonDetail>("POST", `/boons/${enc(id)}/links`, { target, kind });
+  }
+
+  removeLink(id: string, target: string, kind: string) {
+    return this.request<BoonDetail>("DELETE", `/boons/${enc(id)}/links/${enc(kind)}/${enc(target)}`);
   }
 
   claimNext(project: string) {
@@ -71,8 +88,8 @@ export class Client {
     return this.request<Boon>("POST", `/boons/${enc(id)}/unclaim`);
   }
 
-  close(id: string, reason?: string) {
-    return this.request<Boon>("POST", `/boons/${enc(id)}/close`, { reason });
+  close(id: string, reason?: string, force = false) {
+    return this.request<Boon>("POST", `/boons/${enc(id)}/close`, { reason, force });
   }
 
   reopen(id: string) {
@@ -100,7 +117,7 @@ export class Client {
     const data = (await res.json().catch(() => null)) as any;
     if (!res.ok) {
       const error = data?.error;
-      throw new BoonsError(error?.code ?? "http_error", error?.message ?? `HTTP ${res.status}`, res.status);
+      throw new BoonsError(error?.code ?? "http_error", error?.message ?? `HTTP ${res.status}`, res.status, error?.reasons);
     }
     return data as T;
   }

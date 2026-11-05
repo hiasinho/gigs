@@ -19,6 +19,7 @@ export interface Boon {
   type: BoonType;
   priority: number;
   status: Status;
+  parent: string | null;
   claimed_by: string | null;
   claimed_at: string | null;
   created_by: string;
@@ -29,17 +30,30 @@ export interface Boon {
   close_reason: string | null;
 }
 
-/** Why a boon is not ready. No reasons exist yet in slice 1; blockers and parents add them. */
+/** Why an unfinished boon is blocked or has a deferred ancestor. */
 export interface Reason {
   kind: "blocker" | "child" | "inherited" | "deferred_ancestor";
   id: string;
   via?: string;
 }
 
+export type BoonSummary = Pick<Boon, "id" | "title" | "status" | "type" | "priority">;
+export const LINK_KINDS = ["blocks", "related", "discovered-from"] as const;
+export type LinkKind = (typeof LINK_KINDS)[number];
+interface Link { boon_id: string; target_id: string; kind: LinkKind }
+interface Graph { boons: Map<string, Boon>; links: Link[] }
+
 export interface BoonDetail {
   boon: Boon;
   ready: boolean;
   reasons: Reason[];
+  parent: BoonSummary | null;
+  children: BoonSummary[];
+  blockers: BoonSummary[];
+  blocks: BoonSummary[];
+  related: BoonSummary[];
+  discovered_from: BoonSummary[];
+  discovered: BoonSummary[];
 }
 
 export interface NewBoon {
@@ -47,12 +61,16 @@ export interface NewBoon {
   description?: unknown;
   type?: unknown;
   priority?: unknown;
+  parent?: unknown;
+  blocked_by?: unknown;
+  discovered_from?: unknown;
 }
 
 export interface ListFilter {
   status?: string[];
   type?: string;
   all?: boolean;
+  parent?: string;
 }
 
 export class BoonsError extends Error {
@@ -60,6 +78,7 @@ export class BoonsError extends Error {
     public code: string,
     message: string,
     public status: number,
+    public reasons?: Reason[],
   ) {
     super(message);
   }
@@ -99,12 +118,22 @@ const MIGRATIONS = [
   );
   CREATE INDEX boons_project_status ON boons (project, status);
   `,
+  `
+  ALTER TABLE boons ADD COLUMN parent TEXT REFERENCES boons(id);
+  CREATE INDEX boons_parent ON boons(parent);
+  CREATE TABLE links (
+    boon_id TEXT NOT NULL REFERENCES boons(id),
+    target_id TEXT NOT NULL REFERENCES boons(id),
+    kind TEXT NOT NULL CHECK (kind IN ('blocks', 'related', 'discovered-from')),
+    PRIMARY KEY (boon_id, target_id, kind)
+  );
+  `,
 ];
 
 const PROJECT_COLUMNS = "prefix, name, created_at";
 const BOON_COLUMNS =
   "id, project, title, description, type, priority, status, claimed_by, claimed_at, " +
-  "created_by, created_at, updated_at, closed_by, closed_at, close_reason";
+  "created_by, created_at, updated_at, closed_by, closed_at, close_reason, parent";
 const READY_ORDER = "ORDER BY priority, created_at, number";
 
 const PREFIX_RE = /^[a-z][a-z0-9]{1,2}$/;
@@ -175,6 +204,12 @@ export class Store {
       if (!isType(type)) throw badRequest(`type must be one of ${TYPES.join(", ")}`);
       const priority = input.priority ?? 2;
       if (!isPriority(priority)) throw badRequest("priority must be an integer from 0 to 4");
+      const parent = input.parent == null ? null : this.reference(input.parent);
+      if (input.blocked_by !== undefined && !Array.isArray(input.blocked_by)) {
+        throw badRequest("blocked_by must be an array of ids");
+      }
+      const blockers = ((input.blocked_by ?? []) as unknown[]).map((id) => this.reference(id));
+      const discovered = input.discovered_from == null ? null : this.reference(input.discovered_from);
 
       const { next_number: n } = this.db
         .query("UPDATE projects SET next_number = next_number + 1 WHERE prefix = ? RETURNING next_number - 1 AS next_number")
@@ -187,6 +222,10 @@ export class Store {
            VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)`,
         )
         .run(id, p.prefix, n, title, description, type, priority, actor, now, now);
+      this.db.query("UPDATE boons SET parent = ? WHERE id = ?").run(parent, id);
+      for (const target of blockers) this.insertLink(id, target, "blocks");
+      if (discovered) this.insertLink(id, discovered, "discovered-from");
+      this.checkCycles();
       return this.mustGet(id);
     });
   }
@@ -198,7 +237,18 @@ export class Store {
   getDetail(id: string): BoonDetail {
     return this.op(() => {
       const boon = this.mustGet(id);
-      return { boon, ...this.readiness(boon) };
+      const graph = this.graph();
+      const summaries = (ids: string[]) => [...new Set(ids)].map((id) => summary(graph.boons.get(id)!));
+      const outgoing = (kind: LinkKind) => graph.links.filter((l) => l.boon_id === boon.id && l.kind === kind).map((l) => l.target_id);
+      const incoming = (kind: LinkKind) => graph.links.filter((l) => l.target_id === boon.id && l.kind === kind).map((l) => l.boon_id);
+      return {
+        boon, ...this.readiness(boon, graph),
+        parent: boon.parent ? summary(graph.boons.get(boon.parent)!) : null,
+        children: summaries([...graph.boons.values()].filter((b) => b.parent === boon.id).map((b) => b.id)),
+        blockers: summaries(outgoing("blocks")), blocks: summaries(incoming("blocks")),
+        related: summaries([...outgoing("related"), ...incoming("related")]),
+        discovered_from: summaries(outgoing("discovered-from")), discovered: summaries(incoming("discovered-from")),
+      };
     });
   }
 
@@ -217,6 +267,10 @@ export class Store {
       } else if (!filter.all) {
         where.push("status != 'closed'");
       }
+      if (filter.parent !== undefined) {
+        where.push("parent = ?");
+        params.push(filter.parent.trim().toLowerCase());
+      }
       if (filter.type !== undefined) {
         if (!isType(filter.type)) throw badRequest(`type must be one of ${TYPES.join(", ")}`);
         where.push("type = ?");
@@ -233,6 +287,45 @@ export class Store {
     return this.op(() => this.readyBoons(this.mustGetProject(project).prefix));
   }
 
+  blocked(project: string): { boon: Boon; reasons: Reason[] }[] {
+    return this.op(() => {
+      const prefix = this.mustGetProject(project).prefix;
+      const graph = this.graph();
+      return this.orderedBoons(prefix).filter((b) => b.status !== "closed" && b.status !== "deferred")
+        .map((boon) => ({ boon, reasons: this.readiness(boon, graph).reasons }))
+        .filter((entry) => entry.reasons.some((r) => r.kind !== "deferred_ancestor"));
+    });
+  }
+
+  addLink(id: string, target: unknown, kind: unknown, actor: string): BoonDetail {
+    return this.op(() => {
+      checkActor(actor);
+      const boon = this.mustGet(id);
+      const targetId = this.reference(target);
+      const linkKind = checkLinkKind(kind);
+      this.insertLink(boon.id, targetId, linkKind);
+      if (linkKind === "blocks") this.checkCycles();
+      this.db.query("UPDATE boons SET updated_at = ? WHERE id = ?").run(this.timestamp(), boon.id);
+      return this.getDetail(boon.id);
+    });
+  }
+
+  removeLink(id: string, target: unknown, kind: unknown, actor: string): BoonDetail {
+    return this.op(() => {
+      checkActor(actor);
+      const boon = this.mustGet(id);
+      const targetId = this.reference(target);
+      const linkKind = checkLinkKind(kind);
+      if (boon.id === targetId) throw badRequest("a boon cannot link to itself");
+      this.db.query("DELETE FROM links WHERE boon_id = ? AND target_id = ? AND kind = ?").run(boon.id, targetId, linkKind);
+      if (linkKind === "related") {
+        this.db.query("DELETE FROM links WHERE boon_id = ? AND target_id = ? AND kind = ?").run(targetId, boon.id, linkKind);
+      }
+      this.db.query("UPDATE boons SET updated_at = ? WHERE id = ?").run(this.timestamp(), boon.id);
+      return this.getDetail(boon.id);
+    });
+  }
+
   // --- claims ---
 
   claim(id: string, actor: string): Boon {
@@ -244,8 +337,8 @@ export class Store {
         throw conflict(`${boon.id} is already claimed by ${boon.claimed_by} (since ${boon.claimed_at})`, "claimed");
       }
       if (boon.status !== "open") throw conflict(`${boon.id} is ${boon.status} and cannot be claimed`, "not_claimable");
-      const { ready } = this.readiness(boon);
-      if (!ready) throw conflict(`${boon.id} is not ready`, "not_ready");
+      const { ready, reasons } = this.readiness(boon);
+      if (!ready) throw new BoonsError("not_ready", `${boon.id} is not ready: ${JSON.stringify(reasons)}`, 409, reasons);
       return this.claimBoon(boon.id, actor);
     });
   }
@@ -273,7 +366,7 @@ export class Store {
 
   // --- close / reopen ---
 
-  close(id: string, actor: string, reason?: unknown): Boon {
+  close(id: string, actor: string, reason?: unknown, force: unknown = false): Boon {
     return this.op(() => {
       actor = checkActor(actor);
       if (reason !== undefined && reason !== null && typeof reason !== "string") {
@@ -281,6 +374,9 @@ export class Store {
       }
       const boon = this.mustGet(id);
       if (boon.status === "closed") throw conflict(`${boon.id} is already closed`);
+      if (typeof force !== "boolean") throw badRequest("force must be a boolean");
+      const children = this.db.query("SELECT id FROM boons WHERE parent = ? AND status != 'closed'").all(boon.id) as { id: string }[];
+      if (!force && children.length) throw conflict(`${boon.id} has unfinished children: ${children.map((c) => c.id).join(", ")}`, "has_open_children");
       const now = this.timestamp();
       this.db
         .query(
@@ -347,15 +443,87 @@ export class Store {
     return boon;
   }
 
-  /** Slice 1: every open boon is ready. Blockers, children and deferred ancestors add reasons later. */
-  private readiness(boon: Boon): { ready: boolean; reasons: Reason[] } {
-    return { ready: boon.status === "open", reasons: [] };
+  private reference(id: unknown): string {
+    if (typeof id !== "string" || !id.trim()) throw badRequest("referenced id must be a non-empty string");
+    return this.mustGet(id).id;
+  }
+
+  private insertLink(id: string, target: string, kind: LinkKind) {
+    if (id === target) throw badRequest("a boon cannot link to itself");
+    if (kind === "related" && this.db.query("SELECT 1 FROM links WHERE boon_id = ? AND target_id = ? AND kind = 'related'").get(target, id)) return;
+    this.db.query("INSERT OR IGNORE INTO links (boon_id, target_id, kind) VALUES (?, ?, ?)").run(id, target, kind);
+  }
+
+  private graph(): Graph {
+    const boons = this.db.query(`SELECT ${BOON_COLUMNS} FROM boons ORDER BY id`).all() as Boon[];
+    return { boons: new Map(boons.map((b) => [b.id, b])), links: this.db.query("SELECT * FROM links ORDER BY boon_id, target_id, kind").all() as Link[] };
+  }
+
+  private ancestors(boon: Boon, graph: Graph): Boon[] {
+    const result: Boon[] = [];
+    const seen = new Set([boon.id]);
+    let parent = boon.parent;
+    while (parent) {
+      if (seen.has(parent)) throw conflict(`parent cycle: ${[boon.id, ...result.map((b) => b.id), parent].join(" -> ")}`, "cycle");
+      seen.add(parent);
+      const ancestor = graph.boons.get(parent)!;
+      result.push(ancestor);
+      parent = ancestor.parent;
+    }
+    return result;
+  }
+
+  /** Structural checks include closed boons, since they can be reopened. */
+  private checkCycles() {
+    const graph = this.graph();
+    const edges = new Map<string, Set<string>>([...graph.boons.keys()].map((id) => [id, new Set<string>()]));
+    const blockers = (id: string) => graph.links.filter((l) => l.boon_id === id && l.kind === "blocks");
+    for (const boon of graph.boons.values()) {
+      if (boon.parent) edges.get(boon.parent)!.add(boon.id);
+      for (const link of blockers(boon.id)) edges.get(boon.id)!.add(link.target_id);
+      for (const ancestor of this.ancestors(boon, graph)) {
+        for (const link of blockers(ancestor.id)) edges.get(boon.id)!.add(link.target_id);
+      }
+    }
+    const done = new Set<string>();
+    const active = new Set<string>();
+    const path: string[] = [];
+    const visit = (id: string) => {
+      if (active.has(id)) throw conflict(`wait cycle: ${[...path.slice(path.indexOf(id)), id].join(" -> ")}`, "cycle");
+      if (done.has(id)) return;
+      active.add(id);
+      path.push(id);
+      for (const target of edges.get(id)!) visit(target);
+      path.pop();
+      active.delete(id);
+      done.add(id);
+    };
+    for (const id of graph.boons.keys()) visit(id);
+  }
+
+  private readiness(boon: Boon, graph = this.graph()): { ready: boolean; reasons: Reason[] } {
+    const reasons: Reason[] = [];
+    if (boon.status !== "closed") {
+      const blockers = (id: string) => graph.links.filter((l) => l.boon_id === id && l.kind === "blocks" && graph.boons.get(l.target_id)!.status !== "closed");
+      for (const link of blockers(boon.id)) reasons.push({ kind: "blocker", id: link.target_id });
+      for (const child of graph.boons.values()) {
+        if (child.parent === boon.id && child.status !== "closed") reasons.push({ kind: "child", id: child.id });
+      }
+      for (const ancestor of this.ancestors(boon, graph)) {
+        for (const link of blockers(ancestor.id)) reasons.push({ kind: "inherited", id: link.target_id, via: ancestor.id });
+        if (ancestor.status === "deferred") reasons.push({ kind: "deferred_ancestor", id: ancestor.id });
+      }
+    }
+    return { ready: boon.status === "open" && reasons.length === 0, reasons };
+  }
+
+  private orderedBoons(prefix: string): Boon[] {
+    return this.db.query(`SELECT ${BOON_COLUMNS} FROM boons WHERE project = ? ${READY_ORDER}`).all(prefix) as Boon[];
   }
 
   private readyBoons(prefix: string): Boon[] {
-    return this.db
-      .query(`SELECT ${BOON_COLUMNS} FROM boons WHERE project = ? AND status = 'open' ${READY_ORDER}`)
-      .all(prefix) as Boon[];
+    const graph = this.graph();
+    return this.orderedBoons(prefix).filter((boon) => this.readiness(boon, graph).ready);
   }
 
   private claimBoon(id: string, actor: string): Boon {
@@ -365,6 +533,15 @@ export class Store {
       .run(actor, now, now, id);
     return this.mustGet(id);
   }
+}
+
+function summary({ id, title, status, type, priority }: Boon): BoonSummary {
+  return { id, title, status, type, priority };
+}
+
+function checkLinkKind(kind: unknown): LinkKind {
+  if (!LINK_KINDS.includes(kind as LinkKind)) throw badRequest(`kind must be one of ${LINK_KINDS.join(", ")}`);
+  return kind as LinkKind;
 }
 
 function checkActor(actor: string): string {

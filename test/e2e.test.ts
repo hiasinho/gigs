@@ -106,6 +106,43 @@ test("human output", async () => {
   expect(show.stdout).toContain("Long\ndescription");
 });
 
+test("links, blocked derivation, parent filters and force close through the real CLI", async () => {
+  const cwd = join(dir, "links-project");
+  mkdirSync(cwd);
+  const json = (args: string[]) => bnJson(args, { cwd });
+  await json(["init", "lk"]);
+  const blocker = await json(["create", "Blocker"]);
+  const parent = await json(["create", "Parent", "--blocked-by", blocker.id]);
+  const child = await json(["create", "Child", "--parent", parent.id, "--discovered-from", blocker.id]);
+  expect((await json(["list", "--parent", parent.id])).map((b: any) => b.id)).toEqual([child.id]);
+  const detail = await json(["dep", "add", child.id, blocker.id]);
+  expect(detail.blockers.map((b: any) => b.id)).toEqual([blocker.id]);
+  const blocked = await json(["blocked"]);
+  expect(blocked.map((e: any) => e.boon.id)).toEqual([parent.id, child.id]);
+  expect(blocked[1].reasons).toEqual([
+    { kind: "blocker", id: blocker.id }, { kind: "inherited", id: blocker.id, via: parent.id },
+  ]);
+  const shown = await json(["show", child.id]);
+  expect(shown).toMatchObject({ parent: { id: parent.id }, discovered_from: [{ id: blocker.id }], ready: false });
+  const human = await bn(["show", child.id], { cwd });
+  expect(human.stdout).toContain(`inherited: ${blocker.id} (via ${parent.id})`);
+  expect(human.stdout).toContain("parent:");
+  const cycle = await bn(["dep", "add", blocker.id, child.id], { cwd });
+  expect(cycle.code).toBe(1);
+  expect(cycle.stderr).toContain("cycle");
+  expect((await bn(["claim", child.id], { cwd })).stderr).toContain("not ready");
+  await json(["dep", "rm", child.id, blocker.id]);
+  await json(["dep", "add", child.id, blocker.id, "--kind", "related"]);
+  expect((await json(["show", blocker.id])).related.map((b: any) => b.id)).toEqual([child.id]);
+  await json(["dep", "rm", blocker.id, child.id, "--kind", "related"]);
+  expect((await json(["show", child.id])).related).toEqual([]);
+  expect((await bn(["close", parent.id], { cwd })).stderr).toContain("unfinished children");
+  expect(await json(["close", parent.id, "--force"])).toMatchObject({ status: "closed" });
+  await json(["close", blocker.id]);
+  expect((await json(["ready"])).map((b: any) => b.id)).toEqual([child.id]);
+  expect(await json(["claim"])).toMatchObject({ id: child.id });
+});
+
 test("errors, help and connection failures", async () => {
   const help = await bn([]);
   expect(help.code).toBe(0);

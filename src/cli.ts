@@ -77,12 +77,15 @@ const COMMANDS: Record<string, Command> = {
   },
 
   create: {
-    usage: "create <title> [-t type] [-p 0-4] [-d desc|-]",
+    usage: "create <title> [-t type] [-p 0-4] [-d desc|-] [--parent id] [--blocked-by id[,id]] [--discovered-from id]",
     summary: "create a boon and print its id (`-d -` reads the description from stdin)",
     options: {
       type: { type: "string", short: "t" },
       priority: { type: "string", short: "p" },
       description: { type: "string", short: "d" },
+      parent: { type: "string" },
+      "blocked-by": { type: "string" },
+      "discovered-from": { type: "string" },
     },
     async run({ args, values, json, client, project }) {
       const title = args.join(" ");
@@ -94,6 +97,9 @@ const COMMANDS: Record<string, Command> = {
         description,
         type: values.type as string | undefined,
         priority: values.priority === undefined ? undefined : parsePriority(values.priority as string),
+        parent: values.parent as string | undefined,
+        blocked_by: (values["blocked-by"] as string | undefined)?.split(","),
+        discovered_from: values["discovered-from"] as string | undefined,
       });
       if (json) return print(boon);
       console.log(boon.id);
@@ -101,17 +107,19 @@ const COMMANDS: Record<string, Command> = {
   },
 
   list: {
-    usage: "list [--all] [--status s[,s]] [--type t]",
+    usage: "list [--all] [--status s[,s]] [--type t] [--parent id]",
     summary: "list boons (default: unfinished)",
     options: {
       all: { type: "boolean" },
       status: { type: "string" },
       type: { type: "string" },
+      parent: { type: "string" },
     },
     async run({ values, json, client, project }) {
       const boons = await client().listBoons(project(), {
         all: values.all as boolean | undefined,
         status: values.status as string | undefined,
+        parent: values.parent as string | undefined,
         type: values.type as string | undefined,
       });
       if (json) return print(boons);
@@ -126,6 +134,33 @@ const COMMANDS: Record<string, Command> = {
       const boons = await client().ready(project());
       if (json) return print(boons);
       console.log(boons.length ? rows(boons) : "no ready boons");
+    },
+  },
+
+  blocked: {
+    usage: "blocked",
+    summary: "blocked boons with reasons",
+    async run({ json, client, project }) {
+      const blocked = await client().blocked(project());
+      if (json) return print(blocked);
+      console.log(blocked.length ? blocked.map(({ boon, reasons }) => `${rows([boon])}\n  ${reasonText(reasons)}`).join("\n") : "no blocked boons");
+    },
+  },
+
+  dep: {
+    usage: "dep add|rm <id> <target-id> [--kind blocks|related|discovered-from]",
+    summary: "add/remove a link (default: target blocks id)",
+    options: { kind: { type: "string" } },
+    async run({ args, values, json, client }) {
+      const action = arg(args, 0, "add|rm");
+      if (action !== "add" && action !== "rm") throw new Error("expected `bn dep add` or `bn dep rm`");
+      const id = arg(args, 1, "id");
+      const target = arg(args, 2, "target-id");
+      const kind = (values.kind as string | undefined) ?? "blocks";
+      const c = client();
+      const detail = action === "add" ? await c.addLink(id, target, kind) : await c.removeLink(id, target, kind);
+      if (json) return print(detail);
+      console.log(showDetail(detail));
     },
   },
 
@@ -160,9 +195,9 @@ const COMMANDS: Record<string, Command> = {
   },
 
   close: {
-    usage: "close <id...> [-r reason]",
+    usage: "close <id...> [-r reason] [--force]",
     summary: "close one or more boons",
-    options: { reason: { type: "string", short: "r" } },
+    options: { reason: { type: "string", short: "r" }, force: { type: "boolean" } },
     async run({ args, values, json, client }) {
       arg(args, 0, "id");
       const c = client();
@@ -170,7 +205,7 @@ const COMMANDS: Record<string, Command> = {
       let failed = false;
       for (const id of args) {
         try {
-          const boon = await c.close(id, values.reason as string | undefined);
+          const boon = await c.close(id, values.reason as string | undefined, values.force === true);
           closed.push(boon);
           if (!json) console.log(`closed ${boon.id}`);
         } catch (err) {
@@ -309,7 +344,12 @@ function rows(boons: Boon[]): string {
     .join("\n");
 }
 
-function showDetail({ boon: b, ready }: BoonDetail): string {
+function reasonText(reasons: BoonDetail["reasons"]): string {
+  return reasons.map((r) => `${r.kind}: ${r.id}${r.via ? ` (via ${r.via})` : ""}`).join(", ");
+}
+
+function showDetail(detail: BoonDetail): string {
+  const { boon: b, ready, reasons } = detail;
   const lines = [`${b.id}  ${b.title}`, ""];
   const field = (label: string, value: string) => lines.push(`${(label + ":").padEnd(10)}${value}`);
   field("status", b.status + (ready ? " (ready)" : ""));
@@ -319,6 +359,11 @@ function showDetail({ boon: b, ready }: BoonDetail): string {
   field("created", `${b.created_at} by ${b.created_by}`);
   field("updated", b.updated_at);
   if (b.closed_at) field("closed", `${b.closed_at} by ${b.closed_by}${b.close_reason ? `: ${b.close_reason}` : ""}`);
+  if (!ready) field("not ready", reasons.length ? reasonText(reasons) : `status is ${b.status}`);
+  if (detail.parent) field("parent", `${detail.parent.id} ${detail.parent.title}`);
+  for (const key of ["children", "blockers", "blocks", "related", "discovered_from", "discovered"] as const) {
+    if (detail[key].length) field(key, detail[key].map((b) => `${b.id} (${b.status}) ${b.title}`).join(", "));
+  }
   if (b.description) lines.push("", b.description);
   return lines.join("\n");
 }
