@@ -128,14 +128,14 @@ describe("list and ready", () => {
 });
 
 describe("claims", () => {
-  test("claim sets holder; same actor re-claim is a no-op; others conflict", () => {
+  test("claim sets holder; same actor re-claim renews; others conflict", () => {
     store.createBoon("bn", "a", { title: "x" });
     const claimed = store.claim("bn-1", "alice");
-    expect(claimed).toMatchObject({ status: "in_progress", claimed_by: "alice", claimed_at: clock.toISOString() });
+    expect(claimed).toMatchObject({ status: "in_progress", claimed_by: "alice", claimed_at: clock.toISOString(), claim_expires_at: "2026-01-01T01:00:00.000Z" });
     tick();
-    expect(store.claim("BN-1", "alice")).toEqual(claimed);
+    expect(store.claim("BN-1", "alice")).toEqual({ ...claimed, claim_expires_at: "2026-01-01T01:00:01.000Z" });
     const err = expectError(() => store.claim("bn-1", "bob"), "claimed", 409);
-    expect(err.message).toContain("alice");
+    expect(err.message).toBe("bn-1 is already claimed by alice (until 2026-01-01T01:00:01.000Z)");
   });
 
   test("closed and deferred boons are not claimable", () => {
@@ -195,6 +195,7 @@ describe("migrations", () => {
     store.claim(first.id, "holder");
     // Reconstruct the exact v1 schema by removing only migration 2's additions.
     const db = new Database(join(dir, "boons.db"));
+    db.run("DROP TABLE comments; ALTER TABLE boons DROP COLUMN claim_expires_at; ALTER TABLE boons DROP COLUMN defer_until;");
     db.run("DROP TABLE links; DROP INDEX boons_parent; ALTER TABLE boons DROP COLUMN parent; PRAGMA user_version = 1;");
     db.close();
     const upgraded = new Store({ path: join(dir, "boons.db") });
@@ -211,7 +212,7 @@ describe("migrations", () => {
     expect(again.getBoon("bn-1").title).toBe("x");
     again.dispose();
     const db = new Database(join(dir, "boons.db"));
-    expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+    expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 3 });
     db.close();
   });
 });

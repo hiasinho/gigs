@@ -69,6 +69,28 @@ test("config from env", () => {
     port: 1234,
     db: "/x.db",
     token: "t",
+    claimTtlMinutes: 60,
   });
+  expect(configFromEnv({ BOONS_CLAIM_TTL_MINUTES: "15" }).claimTtlMinutes).toBe(15);
   expect(() => configFromEnv({ BOONS_PORT: "nope" })).toThrow();
+  expect(() => configFromEnv({ BOONS_CLAIM_TTL_MINUTES: "0" })).toThrow();
+});
+
+test("slice 3 routes: update, heartbeat, defer, undefer, comments", async () => {
+  const post = (path: string, body?: unknown, actor = "a") => call("POST", path, { actor, body: body === undefined ? undefined : JSON.stringify(body) });
+  const { id } = (await (await post("/projects/bn/boons", { title: "slice3" })).json()) as any;
+  const patched = await call("PATCH", `/boons/${id}`, { actor: "a", body: JSON.stringify({ title: "renamed", priority: 0 }) });
+  expect(await patched.json()).toMatchObject({ id, title: "renamed", priority: 0 });
+  const bad = await call("PATCH", `/boons/${id}`, { actor: "a", body: JSON.stringify({ status: "closed" }) });
+  expect(bad.status).toBe(400);
+  await post(`/boons/${id}/claim`);
+  expect((await post(`/boons/${id}/heartbeat`, undefined, "b")).status).toBe(409);
+  expect((await post(`/boons/${id}/heartbeat`)).status).toBe(200);
+  const comment = await post(`/boons/${id}/comments`, { body: "progress" });
+  expect(comment.status).toBe(201);
+  expect(await comment.json()).toMatchObject({ boon_id: id, author: "a", body: "progress" });
+  expect((await post(`/boons/${id}/defer`, { until: "2000-01-01T00:00:00Z" })).status).toBe(400);
+  expect(await (await post(`/boons/${id}/defer`, { until: "2999-01-01T00:00:00Z" })).json()).toMatchObject({ status: "deferred", claimed_by: null, defer_until: "2999-01-01T00:00:00.000Z" });
+  expect(await (await post(`/boons/${id}/undefer`)).json()).toMatchObject({ status: "open", defer_until: null });
+  expect(((await (await call("GET", `/boons/${id}`)).json()) as any).comments).toHaveLength(1);
 });

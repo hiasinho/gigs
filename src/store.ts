@@ -22,6 +22,8 @@ export interface Boon {
   parent: string | null;
   claimed_by: string | null;
   claimed_at: string | null;
+  claim_expires_at: string | null;
+  defer_until: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -43,6 +45,14 @@ export type LinkKind = (typeof LINK_KINDS)[number];
 interface Link { boon_id: string; target_id: string; kind: LinkKind }
 interface Graph { boons: Map<string, Boon>; links: Link[] }
 
+export interface Comment {
+  id: number;
+  boon_id: string;
+  author: string;
+  body: string;
+  created_at: string;
+}
+
 export interface BoonDetail {
   boon: Boon;
   ready: boolean;
@@ -54,6 +64,7 @@ export interface BoonDetail {
   related: BoonSummary[];
   discovered_from: BoonSummary[];
   discovered: BoonSummary[];
+  comments: Comment[];
 }
 
 export interface NewBoon {
@@ -65,6 +76,16 @@ export interface NewBoon {
   blocked_by?: unknown;
   discovered_from?: unknown;
 }
+
+/** Fields `update` may change; absent fields are left alone. */
+export interface BoonChanges {
+  title?: unknown;
+  description?: unknown;
+  type?: unknown;
+  priority?: unknown;
+  parent?: unknown;
+}
+const CHANGEABLE = ["title", "description", "type", "priority", "parent"];
 
 export interface ListFilter {
   status?: string[];
@@ -128,12 +149,27 @@ const MIGRATIONS = [
     PRIMARY KEY (boon_id, target_id, kind)
   );
   `,
+  // Claims taken before this migration get their expiry in migrate(), using the store's clock and TTL.
+  `
+  ALTER TABLE boons ADD COLUMN claim_expires_at TEXT;
+  ALTER TABLE boons ADD COLUMN defer_until TEXT;
+  CREATE TABLE comments (
+    id         INTEGER PRIMARY KEY,
+    boon_id    TEXT NOT NULL REFERENCES boons(id),
+    author     TEXT NOT NULL,
+    body       TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX comments_boon ON comments(boon_id);
+  `,
 ];
 
 const PROJECT_COLUMNS = "prefix, name, created_at";
 const BOON_COLUMNS =
-  "id, project, title, description, type, priority, status, claimed_by, claimed_at, " +
+  "id, project, title, description, type, priority, status, claimed_by, claimed_at, claim_expires_at, defer_until, " +
   "created_by, created_at, updated_at, closed_by, closed_at, close_reason, parent";
+const COMMENT_COLUMNS = "id, boon_id, author, body, created_at";
+const CLEAR_CLAIM = "claimed_by = NULL, claimed_at = NULL, claim_expires_at = NULL";
 const READY_ORDER = "ORDER BY priority, created_at, number";
 
 const PREFIX_RE = /^[a-z][a-z0-9]{1,2}$/;
@@ -141,19 +177,24 @@ const PREFIX_RE = /^[a-z][a-z0-9]{1,2}$/;
 export interface StoreOptions {
   path: string;
   now?: () => Date;
+  /** How long a claim lasts without activity by its holder. Default 60. */
+  claimTtlMinutes?: number;
 }
 
 export class Store {
   private db: Database;
   private now: () => Date;
+  private ttlMs: number;
 
-  constructor({ path, now = () => new Date() }: StoreOptions) {
+  constructor({ path, now = () => new Date(), claimTtlMinutes = 60 }: StoreOptions) {
+    if (!(claimTtlMinutes > 0)) throw new Error(`claim TTL must be a positive number of minutes, got ${claimTtlMinutes}`);
     this.now = now;
+    this.ttlMs = claimTtlMinutes * 60_000;
     this.db = new Database(path, { create: true, strict: true });
     this.db.run("PRAGMA busy_timeout = 5000");
     this.db.run("PRAGMA journal_mode = WAL");
     this.db.run("PRAGMA foreign_keys = ON");
-    this.op(() => this.migrate());
+    this.db.transaction(() => this.migrate()).immediate();
   }
 
   /** Closes the database connection. */
@@ -196,14 +237,10 @@ export class Store {
     return this.op(() => {
       actor = checkActor(actor);
       const p = this.mustGetProject(project);
-      const title = typeof input.title === "string" ? input.title.trim() : "";
-      if (!title) throw badRequest("title is required");
-      const description = input.description ?? "";
-      if (typeof description !== "string") throw badRequest("description must be a string");
-      const type = input.type ?? "task";
-      if (!isType(type)) throw badRequest(`type must be one of ${TYPES.join(", ")}`);
-      const priority = input.priority ?? 2;
-      if (!isPriority(priority)) throw badRequest("priority must be an integer from 0 to 4");
+      const title = checkTitle(input.title);
+      const description = checkDescription(input.description ?? "");
+      const type = checkType(input.type ?? "task");
+      const priority = checkPriority(input.priority ?? 2);
       const parent = input.parent == null ? null : this.reference(input.parent);
       if (input.blocked_by !== undefined && !Array.isArray(input.blocked_by)) {
         throw badRequest("blocked_by must be an array of ids");
@@ -241,6 +278,7 @@ export class Store {
       const summaries = (ids: string[]) => [...new Set(ids)].map((id) => summary(graph.boons.get(id)!));
       const outgoing = (kind: LinkKind) => graph.links.filter((l) => l.boon_id === boon.id && l.kind === kind).map((l) => l.target_id);
       const incoming = (kind: LinkKind) => graph.links.filter((l) => l.target_id === boon.id && l.kind === kind).map((l) => l.boon_id);
+      const comments = this.db.query(`SELECT ${COMMENT_COLUMNS} FROM comments WHERE boon_id = ? ORDER BY id`).all(boon.id) as Comment[];
       return {
         boon, ...this.readiness(boon, graph),
         parent: boon.parent ? summary(graph.boons.get(boon.parent)!) : null,
@@ -248,7 +286,44 @@ export class Store {
         blockers: summaries(outgoing("blocks")), blocks: summaries(incoming("blocks")),
         related: summaries([...outgoing("related"), ...incoming("related")]),
         discovered_from: summaries(outgoing("discovered-from")), discovered: summaries(incoming("discovered-from")),
+        comments,
       };
+    });
+  }
+
+  /** Changes a boon's fields; status changes go through claim/close/defer instead. */
+  update(id: string, actor: string, changes: BoonChanges): Boon {
+    return this.op(() => {
+      actor = checkActor(actor);
+      const boon = this.mustGet(id);
+      if (typeof changes !== "object" || changes === null) throw badRequest("changes must be an object");
+      const unknown = Object.keys(changes).filter((k) => !CHANGEABLE.includes(k));
+      if (unknown.length) throw badRequest(`cannot update ${unknown.join(", ")}; updatable fields: ${CHANGEABLE.join(", ")}`);
+      const sets: Record<string, string | number | null> = {};
+      if (changes.title !== undefined) sets.title = checkTitle(changes.title);
+      if (changes.description !== undefined) sets.description = checkDescription(changes.description);
+      if (changes.type !== undefined) sets.type = checkType(changes.type);
+      if (changes.priority !== undefined) sets.priority = checkPriority(changes.priority);
+      if (changes.parent !== undefined) sets.parent = changes.parent === null ? null : this.reference(changes.parent);
+      const keys = Object.keys(sets);
+      if (!keys.length) throw badRequest(`nothing to update; give at least one of ${CHANGEABLE.join(", ")}`);
+      this.db.query(`UPDATE boons SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`).run(...Object.values(sets), boon.id);
+      if ("parent" in sets) this.checkCycles();
+      this.touch(boon, actor);
+      return this.mustGet(boon.id);
+    });
+  }
+
+  addComment(id: string, actor: string, body: unknown): Comment {
+    return this.op(() => {
+      actor = checkActor(actor);
+      const boon = this.mustGet(id);
+      if (typeof body !== "string" || !body.trim()) throw badRequest("comment body is required");
+      const comment = this.db
+        .query(`INSERT INTO comments (boon_id, author, body, created_at) VALUES (?, ?, ?, ?) RETURNING ${COMMENT_COLUMNS}`)
+        .get(boon.id, actor, body.trim(), this.timestamp()) as Comment;
+      this.touch(boon, actor);
+      return comment;
     });
   }
 
@@ -299,20 +374,20 @@ export class Store {
 
   addLink(id: string, target: unknown, kind: unknown, actor: string): BoonDetail {
     return this.op(() => {
-      checkActor(actor);
+      actor = checkActor(actor);
       const boon = this.mustGet(id);
       const targetId = this.reference(target);
       const linkKind = checkLinkKind(kind);
       this.insertLink(boon.id, targetId, linkKind);
       if (linkKind === "blocks") this.checkCycles();
-      this.db.query("UPDATE boons SET updated_at = ? WHERE id = ?").run(this.timestamp(), boon.id);
+      this.touch(boon, actor);
       return this.getDetail(boon.id);
     });
   }
 
   removeLink(id: string, target: unknown, kind: unknown, actor: string): BoonDetail {
     return this.op(() => {
-      checkActor(actor);
+      actor = checkActor(actor);
       const boon = this.mustGet(id);
       const targetId = this.reference(target);
       const linkKind = checkLinkKind(kind);
@@ -321,7 +396,7 @@ export class Store {
       if (linkKind === "related") {
         this.db.query("DELETE FROM links WHERE boon_id = ? AND target_id = ? AND kind = ?").run(targetId, boon.id, linkKind);
       }
-      this.db.query("UPDATE boons SET updated_at = ? WHERE id = ?").run(this.timestamp(), boon.id);
+      this.touch(boon, actor);
       return this.getDetail(boon.id);
     });
   }
@@ -333,8 +408,8 @@ export class Store {
       actor = checkActor(actor);
       const boon = this.mustGet(id);
       if (boon.status === "in_progress") {
-        if (boon.claimed_by === actor) return boon;
-        throw conflict(`${boon.id} is already claimed by ${boon.claimed_by} (since ${boon.claimed_at})`, "claimed");
+        if (boon.claimed_by === actor) return this.renew(boon.id);
+        throw claimedBy(boon);
       }
       if (boon.status !== "open") throw conflict(`${boon.id} is ${boon.status} and cannot be claimed`, "not_claimable");
       const { ready, reasons } = this.readiness(boon);
@@ -352,13 +427,24 @@ export class Store {
     });
   }
 
+  /** Renews the claim; only its holder may do so. */
+  heartbeat(id: string, actor: string): Boon {
+    return this.op(() => {
+      actor = checkActor(actor);
+      const boon = this.mustGet(id);
+      if (boon.status !== "in_progress") throw conflict(`${boon.id} is not claimed (status ${boon.status})`);
+      if (boon.claimed_by !== actor) throw claimedBy(boon);
+      return this.renew(boon.id);
+    });
+  }
+
   unclaim(id: string, actor: string): Boon {
     return this.op(() => {
       actor = checkActor(actor);
       const boon = this.mustGet(id);
       if (boon.status !== "in_progress") throw conflict(`${boon.id} is not claimed`);
       this.db
-        .query("UPDATE boons SET status = 'open', claimed_by = NULL, claimed_at = NULL, updated_at = ? WHERE id = ?")
+        .query(`UPDATE boons SET status = 'open', ${CLEAR_CLAIM}, updated_at = ? WHERE id = ?`)
         .run(this.timestamp(), boon.id);
       return this.mustGet(boon.id);
     });
@@ -380,7 +466,7 @@ export class Store {
       const now = this.timestamp();
       this.db
         .query(
-          `UPDATE boons SET status = 'closed', claimed_by = NULL, claimed_at = NULL,
+          `UPDATE boons SET status = 'closed', ${CLEAR_CLAIM}, defer_until = NULL,
              closed_by = ?, closed_at = ?, close_reason = ?, updated_at = ? WHERE id = ?`,
         )
         .run(actor, now, reason?.trim() || null, now, boon.id);
@@ -402,11 +488,59 @@ export class Store {
     });
   }
 
+  // --- defer ---
+
+  /** Sets an open or in-progress boon aside, optionally until a future time; clears any claim. */
+  defer(id: string, actor: string, until?: unknown): Boon {
+    return this.op(() => {
+      actor = checkActor(actor);
+      const boon = this.mustGet(id);
+      if (boon.status === "closed") throw conflict(`${boon.id} is closed and cannot be deferred`);
+      let deferUntil: string | null = null;
+      if (until !== undefined && until !== null) {
+        const date = typeof until === "string" ? new Date(until) : new Date(NaN);
+        if (isNaN(date.getTime()) || date.getUTCFullYear() > 9999) throw badRequest("until must be an ISO-8601 time");
+        if (date <= this.now()) throw badRequest("until must be in the future");
+        deferUntil = date.toISOString();
+      }
+      this.db
+        .query(`UPDATE boons SET status = 'deferred', ${CLEAR_CLAIM}, defer_until = ?, updated_at = ? WHERE id = ?`)
+        .run(deferUntil, this.timestamp(), boon.id);
+      return this.mustGet(boon.id);
+    });
+  }
+
+  undefer(id: string, actor: string): Boon {
+    return this.op(() => {
+      actor = checkActor(actor);
+      const boon = this.mustGet(id);
+      if (boon.status !== "deferred") throw conflict(`${boon.id} is not deferred`);
+      this.db.query("UPDATE boons SET status = 'open', defer_until = NULL, updated_at = ? WHERE id = ?").run(this.timestamp(), boon.id);
+      return this.mustGet(boon.id);
+    });
+  }
+
   // --- internals ---
 
-  /** Every store operation runs in its own IMMEDIATE transaction. */
+  /** Every store operation runs in its own IMMEDIATE transaction, after applying lapsed claims and defers. */
   private op<T>(fn: () => T): T {
-    return this.db.transaction(fn).immediate();
+    return this.db.transaction(() => {
+      this.applyTimeTransitions();
+      return fn();
+    }).immediate();
+  }
+
+  /** Lazy time-based transitions; each takes effect (updated_at) at the moment it lapsed. */
+  private applyTimeTransitions() {
+    const now = this.timestamp();
+    this.db
+      .query(`UPDATE boons SET status = 'open', ${CLEAR_CLAIM}, updated_at = claim_expires_at
+              WHERE status = 'in_progress' AND claim_expires_at <= ?`)
+      .run(now);
+    this.db
+      .query(`UPDATE boons SET status = 'open', defer_until = NULL, updated_at = defer_until
+              WHERE status = 'deferred' AND defer_until <= ?`)
+      .run(now);
   }
 
   private migrate() {
@@ -417,10 +551,27 @@ export class Store {
     if (user_version === MIGRATIONS.length) return;
     for (const sql of MIGRATIONS.slice(user_version)) this.db.run(sql);
     this.db.run(`PRAGMA user_version = ${MIGRATIONS.length}`);
+    // Claims from before claim expiry existed get a full TTL from now rather than lapsing at once.
+    this.db.query("UPDATE boons SET claim_expires_at = ? WHERE status = 'in_progress' AND claim_expires_at IS NULL").run(this.expiry());
   }
 
   private timestamp() {
     return this.now().toISOString();
+  }
+
+  private expiry() {
+    return new Date(this.now().getTime() + this.ttlMs).toISOString();
+  }
+
+  private renew(id: string): Boon {
+    this.db.query("UPDATE boons SET claim_expires_at = ? WHERE id = ?").run(this.expiry(), id);
+    return this.mustGet(id);
+  }
+
+  /** Records a change to the boon; activity by the claim holder renews the claim. */
+  private touch(boon: Boon, actor: string) {
+    this.db.query("UPDATE boons SET updated_at = ? WHERE id = ?").run(this.timestamp(), boon.id);
+    if (boon.status === "in_progress" && boon.claimed_by === actor) this.renew(boon.id);
   }
 
   private findProject(prefix: string): Project | null {
@@ -529,10 +680,14 @@ export class Store {
   private claimBoon(id: string, actor: string): Boon {
     const now = this.timestamp();
     this.db
-      .query("UPDATE boons SET status = 'in_progress', claimed_by = ?, claimed_at = ?, updated_at = ? WHERE id = ?")
-      .run(actor, now, now, id);
+      .query("UPDATE boons SET status = 'in_progress', claimed_by = ?, claimed_at = ?, claim_expires_at = ?, updated_at = ? WHERE id = ?")
+      .run(actor, now, this.expiry(), now, id);
     return this.mustGet(id);
   }
+}
+
+function claimedBy(boon: Boon) {
+  return conflict(`${boon.id} is already claimed by ${boon.claimed_by} (until ${boon.claim_expires_at})`, "claimed");
 }
 
 function summary({ id, title, status, type, priority }: Boon): BoonSummary {
@@ -547,6 +702,27 @@ function checkLinkKind(kind: unknown): LinkKind {
 function checkActor(actor: string): string {
   if (typeof actor !== "string" || !actor.trim()) throw badRequest("actor is required");
   return actor.trim();
+}
+
+function checkTitle(v: unknown): string {
+  const title = typeof v === "string" ? v.trim() : "";
+  if (!title) throw badRequest("title is required");
+  return title;
+}
+
+function checkDescription(v: unknown): string {
+  if (typeof v !== "string") throw badRequest("description must be a string");
+  return v;
+}
+
+function checkType(v: unknown): BoonType {
+  if (!isType(v)) throw badRequest(`type must be one of ${TYPES.join(", ")}`);
+  return v;
+}
+
+function checkPriority(v: unknown): number {
+  if (!isPriority(v)) throw badRequest("priority must be an integer from 0 to 4");
+  return v;
 }
 
 function isType(v: unknown): v is BoonType {

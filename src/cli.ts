@@ -2,9 +2,9 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
-import { Client } from "./client";
+import { Client, type BoonChangesInput } from "./client";
 import { configFromEnv, serve } from "./server";
-import { BoonsError, type Boon, type BoonDetail, type Project } from "./store";
+import { BoonsError, type Boon, type BoonDetail, type LinkKind, type Project, type Reason } from "./store";
 
 type Options = NonNullable<ParseArgsConfig["options"]>;
 type Values = Record<string, string | boolean | undefined>;
@@ -34,7 +34,7 @@ interface Command {
 const COMMANDS: Record<string, Command> = {
   serve: {
     usage: "serve",
-    summary: "start the server (env: BOONS_HOST, BOONS_PORT, BOONS_DB, BOONS_TOKEN)",
+    summary: "start the server (env: BOONS_HOST, BOONS_PORT, BOONS_DB, BOONS_TOKEN, BOONS_CLAIM_TTL_MINUTES)",
     async run() {
       const config = configFromEnv();
       const server = serve(config);
@@ -57,6 +57,9 @@ const COMMANDS: Record<string, Command> = {
         if (!(err instanceof BoonsError && err.code === "conflict")) throw err;
         project = await c.getProject(prefix);
         created = false;
+        if (values.name !== undefined && values.name !== project.name) {
+          console.error(`warning: project ${project.prefix} already exists as "${project.name}"; --name ignored`);
+        }
       }
       writeFileSync(".boons.json", JSON.stringify({ project: project.prefix }, null, 2) + "\n");
       if (json) return print(project);
@@ -90,8 +93,7 @@ const COMMANDS: Record<string, Command> = {
     async run({ args, values, json, client, project }) {
       const title = args.join(" ");
       if (!title.trim()) throw new Error("missing <title>");
-      let description = values.description as string | undefined;
-      if (description === "-") description = (await Bun.stdin.text()).trimEnd();
+      const description = await readText(values.description as string | undefined);
       const boon = await client().createBoon(project(), {
         title,
         description,
@@ -160,7 +162,8 @@ const COMMANDS: Record<string, Command> = {
       const c = client();
       const detail = action === "add" ? await c.addLink(id, target, kind) : await c.removeLink(id, target, kind);
       if (json) return print(detail);
-      console.log(showDetail(detail));
+      const phrase = { blocks: "blocked by", related: "related to", "discovered-from": "discovered from" }[kind as LinkKind];
+      console.log(`${detail.boon.id} is ${action === "add" ? "now" : "no longer"} ${phrase} ${target.toLowerCase()}`);
     },
   },
 
@@ -171,6 +174,32 @@ const COMMANDS: Record<string, Command> = {
       const detail = await client().getBoon(arg(args, 0, "id"));
       if (json) return print(detail);
       console.log(showDetail(detail));
+    },
+  },
+
+  update: {
+    usage: "update <id> [--title t] [-d desc|-] [-t type] [-p n] [--parent id|none]",
+    summary: "change a boon's fields (`--parent none` clears the parent)",
+    options: {
+      title: { type: "string" },
+      description: { type: "string", short: "d" },
+      type: { type: "string", short: "t" },
+      priority: { type: "string", short: "p" },
+      parent: { type: "string" },
+    },
+    async run({ args, values, json, client }) {
+      const id = arg(args, 0, "id");
+      const changes: BoonChangesInput = {
+        title: values.title as string | undefined,
+        description: await readText(values.description as string | undefined),
+        type: values.type as string | undefined,
+        priority: values.priority === undefined ? undefined : parsePriority(values.priority as string),
+        parent: values.parent === "none" ? null : (values.parent as string | undefined),
+      };
+      if (Object.values(changes).every((v) => v === undefined)) throw new Error("nothing to update (see `bn update --help`)");
+      const boon = await client().update(id, changes);
+      if (json) return print(boon);
+      console.log(`updated ${boon.id}`);
     },
   },
 
@@ -191,6 +220,16 @@ const COMMANDS: Record<string, Command> = {
       const boon = await client().unclaim(arg(args, 0, "id"));
       if (json) return print(boon);
       console.log(`unclaimed ${boon.id}`);
+    },
+  },
+
+  heartbeat: {
+    usage: "heartbeat <id>",
+    summary: "renew your claim on a boon",
+    async run({ args, json, client }) {
+      const boon = await client().heartbeat(arg(args, 0, "id"));
+      if (json) return print(boon);
+      console.log(`claim on ${boon.id} renewed until ${boon.claim_expires_at}`);
     },
   },
 
@@ -228,6 +267,41 @@ const COMMANDS: Record<string, Command> = {
       console.log(`reopened ${boon.id}`);
     },
   },
+  defer: {
+    usage: "defer <id> [--until <ISO time|30m|4h|2d>]",
+    summary: "set a boon aside (clears its claim), optionally until a time",
+    options: { until: { type: "string" } },
+    async run({ args, values, json, client }) {
+      const until = values.until === undefined ? undefined : parseUntil(values.until as string);
+      const boon = await client().defer(arg(args, 0, "id"), until);
+      if (json) return print(boon);
+      console.log(`deferred ${boon.id}${boon.defer_until ? ` until ${boon.defer_until}` : ""}`);
+    },
+  },
+
+  undefer: {
+    usage: "undefer <id>",
+    summary: "make a deferred boon open again",
+    async run({ args, json, client }) {
+      const boon = await client().undefer(arg(args, 0, "id"));
+      if (json) return print(boon);
+      console.log(`undeferred ${boon.id}`);
+    },
+  },
+
+  comment: {
+    usage: "comment <id> <text|->",
+    summary: "add a comment to a boon (`-` reads it from stdin)",
+    async run({ args, json, client }) {
+      const id = arg(args, 0, "id");
+      const text = await readText(args.slice(1).join(" "));
+      if (!text?.trim()) throw new Error("missing <text>");
+      const comment = await client().comment(id, text);
+      if (json) return print(comment);
+      console.log(`commented on ${comment.boon_id}`);
+    },
+  },
+
 };
 
 function usage() {
@@ -325,6 +399,19 @@ function parsePriority(s: string): number | string {
   return m ? Number(m[1]) : s;
 }
 
+/** `-` means: read from stdin. */
+async function readText(value: string | undefined): Promise<string | undefined> {
+  return value === "-" ? (await Bun.stdin.text()).trimEnd() : value;
+}
+
+/** A relative duration like 30m, 4h or 2d becomes an ISO time; anything else goes to the server as is. */
+function parseUntil(s: string): string {
+  const m = /^(\d+)([mhd])$/.exec(s.trim());
+  if (!m) return s;
+  const ms = Number(m[1]) * { m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as "m" | "h" | "d"];
+  return new Date(Date.now() + ms).toISOString();
+}
+
 function print(value: unknown) {
   console.log(JSON.stringify(value, null, 2));
 }
@@ -338,22 +425,31 @@ function rows(boons: Boon[]): string {
         `P${b.priority}`,
         b.status.padEnd(11),
         b.type.padEnd(7),
-        b.title + (b.claimed_by ? `  [@${b.claimed_by}]` : ""),
+        b.title + (b.claimed_by ? `  [@${b.claimed_by}]` : "") + (b.defer_until ? `  [until ${b.defer_until}]` : ""),
       ].join("  "),
     )
     .join("\n");
 }
 
-function reasonText(reasons: BoonDetail["reasons"]): string {
-  return reasons.map((r) => `${r.kind}: ${r.id}${r.via ? ` (via ${r.via})` : ""}`).join(", ");
+function reasonText(reasons: Reason[]): string {
+  const text = (r: Reason) => {
+    switch (r.kind) {
+      case "blocker": return `blocked by ${r.id}`;
+      case "child": return `child ${r.id} unfinished`;
+      case "inherited": return `inherits blocker ${r.id} via ${r.via}`;
+      case "deferred_ancestor": return `ancestor ${r.id} deferred`;
+    }
+  };
+  return reasons.map(text).join("; ");
 }
 
 function showDetail(detail: BoonDetail): string {
   const { boon: b, ready, reasons } = detail;
   const lines = [`${b.id}  ${b.title}`, ""];
-  const field = (label: string, value: string) => lines.push(`${(label + ":").padEnd(10)}${value}`);
+  const field = (label: string, value: string) => lines.push(`${(label + ": ").padEnd(11)}${value}`);
   field("status", b.status + (ready ? " (ready)" : ""));
-  if (b.claimed_by) field("claimed", `by ${b.claimed_by} at ${b.claimed_at}`);
+  if (b.claimed_by) field("claimed", `by ${b.claimed_by} at ${b.claimed_at}, expires ${b.claim_expires_at}`);
+  if (b.status === "deferred") field("deferred", b.defer_until ? `until ${b.defer_until}` : "until undeferred");
   field("type", b.type);
   field("priority", `P${b.priority}`);
   field("created", `${b.created_at} by ${b.created_by}`);
@@ -365,6 +461,10 @@ function showDetail(detail: BoonDetail): string {
     if (detail[key].length) field(key, detail[key].map((b) => `${b.id} (${b.status}) ${b.title}`).join(", "));
   }
   if (b.description) lines.push("", b.description);
+  if (detail.comments.length) {
+    lines.push("", "comments:");
+    for (const c of detail.comments) lines.push(`  ${c.created_at} ${c.author}:`, ...c.body.split("\n").map((l) => `    ${l}`));
+  }
   return lines.join("\n");
 }
 

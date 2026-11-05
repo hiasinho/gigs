@@ -1,4 +1,4 @@
-import { BoonsError, type Boon, type BoonDetail, type Project, type Reason } from "./store";
+import { BoonsError, type Boon, type BoonDetail, type Comment, type Project, type Reason } from "./store";
 
 export interface ClientOptions {
   url: string;
@@ -14,6 +14,14 @@ export interface NewBoonInput {
   parent?: string;
   blocked_by?: string[];
   discovered_from?: string;
+}
+
+export interface BoonChangesInput {
+  title?: string;
+  description?: string;
+  type?: string;
+  priority?: number | string;
+  parent?: string | null;
 }
 
 export interface ListQuery {
@@ -94,6 +102,26 @@ export class Client {
 
   reopen(id: string) {
     return this.request<Boon>("POST", `/boons/${enc(id)}/reopen`);
+  }
+
+  update(id: string, changes: BoonChangesInput) {
+    return this.request<Boon>("PATCH", `/boons/${enc(id)}`, changes);
+  }
+
+  heartbeat(id: string) {
+    return this.request<Boon>("POST", `/boons/${enc(id)}/heartbeat`);
+  }
+
+  defer(id: string, until?: string) {
+    return this.request<Boon>("POST", `/boons/${enc(id)}/defer`, { until });
+  }
+
+  undefer(id: string) {
+    return this.request<Boon>("POST", `/boons/${enc(id)}/undefer`);
+  }
+
+  comment(id: string, body: string) {
+    return this.request<Comment>("POST", `/boons/${enc(id)}/comments`, { body });
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {

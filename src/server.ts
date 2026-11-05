@@ -86,6 +86,16 @@ async function route(store: Store, req: Request, token: string | undefined): Pro
     }
     case "POST /boons/:/reopen":
       return store.reopen(param);
+    case "PATCH /boons/:":
+      return store.update(param, actor, await readBody(req));
+    case "POST /boons/:/heartbeat":
+      return store.heartbeat(param, actor);
+    case "POST /boons/:/defer":
+      return store.defer(param, actor, (await readBody(req)).until);
+    case "POST /boons/:/undefer":
+      return store.undefer(param, actor);
+    case "POST /boons/:/comments":
+      return json(store.addComment(param, actor, (await readBody(req)).body), 201);
   }
   throw new BoonsError("not_found", `no route for ${req.method} ${url.pathname}`, 404);
 }
@@ -114,22 +124,26 @@ export interface ServerConfig {
   port: number;
   db: string;
   token?: string;
+  claimTtlMinutes: number;
 }
 
 export function configFromEnv(env: Record<string, string | undefined> = process.env): ServerConfig {
   const port = Number(env.BOONS_PORT ?? 7357);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error(`invalid BOONS_PORT: ${env.BOONS_PORT}`);
+  const claimTtlMinutes = Number(env.BOONS_CLAIM_TTL_MINUTES || 60);
+  if (!(claimTtlMinutes > 0)) throw new Error(`invalid BOONS_CLAIM_TTL_MINUTES: ${env.BOONS_CLAIM_TTL_MINUTES}`);
   return {
     host: env.BOONS_HOST || "127.0.0.1",
     port,
     db: env.BOONS_DB || join(homedir(), ".local/share/boons/boons.db"),
     token: env.BOONS_TOKEN || undefined,
+    claimTtlMinutes,
   };
 }
 
 export function serve(config: ServerConfig) {
   mkdirSync(dirname(config.db), { recursive: true });
-  const store = new Store({ path: config.db });
+  const store = new Store({ path: config.db, claimTtlMinutes: config.claimTtlMinutes });
   return Bun.serve({
     hostname: config.host,
     port: config.port,

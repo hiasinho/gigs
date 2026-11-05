@@ -58,6 +58,9 @@ test("full workflow through the CLI", async () => {
   expect(JSON.parse(readFileSync(join(repo, ".boons.json"), "utf8"))).toEqual({ project: "bn" });
   // Idempotent: linking an existing project succeeds.
   expect(await bnJson(["init", "bn"])).toMatchObject({ prefix: "bn", name: "Boons" });
+  const renamed = await bn(["init", "bn", "--name", "Other"]);
+  expect(renamed.code).toBe(0);
+  expect(renamed.stderr).toBe('warning: project bn already exists as "Boons"; --name ignored\n');
   expect((await bnJson(["projects"])).map((p: any) => p.prefix)).toEqual(["bn"]);
 
   // Project is found from a subdirectory via .boons.json.
@@ -115,6 +118,7 @@ test("links, blocked derivation, parent filters and force close through the real
   const parent = await json(["create", "Parent", "--blocked-by", blocker.id]);
   const child = await json(["create", "Child", "--parent", parent.id, "--discovered-from", blocker.id]);
   expect((await json(["list", "--parent", parent.id])).map((b: any) => b.id)).toEqual([child.id]);
+  expect((await bn(["dep", "add", child.id.toUpperCase(), blocker.id], { cwd })).stdout).toBe(`${child.id} is now blocked by ${blocker.id}\n`);
   const detail = await json(["dep", "add", child.id, blocker.id]);
   expect(detail.blockers.map((b: any) => b.id)).toEqual([blocker.id]);
   const blocked = await json(["blocked"]);
@@ -125,13 +129,13 @@ test("links, blocked derivation, parent filters and force close through the real
   const shown = await json(["show", child.id]);
   expect(shown).toMatchObject({ parent: { id: parent.id }, discovered_from: [{ id: blocker.id }], ready: false });
   const human = await bn(["show", child.id], { cwd });
-  expect(human.stdout).toContain(`inherited: ${blocker.id} (via ${parent.id})`);
+  expect(human.stdout).toContain(`not ready: blocked by ${blocker.id}; inherits blocker ${blocker.id} via ${parent.id}`);
   expect(human.stdout).toContain("parent:");
   const cycle = await bn(["dep", "add", blocker.id, child.id], { cwd });
   expect(cycle.code).toBe(1);
   expect(cycle.stderr).toContain("cycle");
   expect((await bn(["claim", child.id], { cwd })).stderr).toContain("not ready");
-  await json(["dep", "rm", child.id, blocker.id]);
+  expect((await bn(["dep", "rm", child.id, blocker.id], { cwd })).stdout).toBe(`${child.id} is no longer blocked by ${blocker.id}\n`);
   await json(["dep", "add", child.id, blocker.id, "--kind", "related"]);
   expect((await json(["show", blocker.id])).related.map((b: any) => b.id)).toEqual([child.id]);
   await json(["dep", "rm", blocker.id, child.id, "--kind", "related"]);
@@ -143,11 +147,59 @@ test("links, blocked derivation, parent filters and force close through the real
   expect(await json(["claim"])).toMatchObject({ id: child.id });
 });
 
+test("update, heartbeat, defer and comments through the real CLI", async () => {
+  const cwd = join(dir, "slice3-project");
+  mkdirSync(cwd);
+  const json = (args: string[], opts: Parameters<typeof bn>[1] = {}) => bnJson(args, { cwd, ...opts });
+  const run = (args: string[], opts: Parameters<typeof bn>[1] = {}) => bn(args, { cwd, ...opts });
+  await json(["init", "sl"]);
+  const epic = await json(["create", "Epic", "-t", "epic"]);
+  const task = await json(["create", "Task"]);
+
+  expect(await json(["update", task.id, "--title", "Better task", "-p", "P0", "-t", "bug", "--parent", epic.id]))
+    .toMatchObject({ title: "Better task", priority: 0, type: "bug", parent: epic.id });
+  expect(await json(["update", task.id, "-d", "-"], { stdin: "from stdin\n" })).toMatchObject({ description: "from stdin" });
+  expect(await json(["update", task.id, "--parent", "none"])).toMatchObject({ parent: null });
+  expect((await run(["update", task.id])).stderr).toContain("nothing to update");
+  expect((await run(["update", task.id, "-t", "story"])).stderr).toContain("type must be one of");
+  expect((await run(["update", epic.id, "--parent", epic.id])).stderr).toContain("cycle");
+
+  const claimed = await json(["claim", task.id]);
+  expect(claimed.claim_expires_at).toBeString();
+  expect(await json(["heartbeat", task.id])).toMatchObject({ claimed_by: "agent-1" });
+  const stolen = await run(["heartbeat", task.id, "--as", "agent-2"]);
+  expect(stolen.code).toBe(1);
+  expect(stolen.stderr).toContain(`${task.id} is already claimed by agent-1 (until`);
+
+  expect(await json(["comment", task.id, "halfway", "there"])).toMatchObject({ boon_id: task.id, author: "agent-1", body: "halfway there" });
+  await json(["comment", task.id, "-"], { stdin: "multi\nline\n", env: { BN_ACTOR: "agent-2" } });
+  const shown = await json(["show", task.id]);
+  expect(shown.comments.map((c: any) => [c.author, c.body])).toEqual([["agent-1", "halfway there"], ["agent-2", "multi\nline"]]);
+  const human = (await run(["show", task.id])).stdout;
+  expect(human).toMatch(/claimed:   by agent-1 at \S+, expires \S+/);
+  expect(human).toMatch(/comments:\n  \S+ agent-1:\n    halfway there\n  \S+ agent-2:\n    multi\n    line/);
+
+  const before = Date.now();
+  const deferred = await json(["defer", task.id, "--until", "2h"]);
+  expect(deferred).toMatchObject({ status: "deferred", claimed_by: null });
+  const until = Date.parse(deferred.defer_until);
+  expect(until - before).toBeGreaterThanOrEqual(2 * 3_600_000 - 1000);
+  expect(until - before).toBeLessThan(2 * 3_600_000 + 60_000);
+  expect((await json(["ready"])).map((b: any) => b.id)).toEqual([epic.id]);
+  expect((await run(["list"])).stdout).toContain(`[until ${deferred.defer_until}]`);
+  expect((await run(["show", task.id])).stdout).toContain(`deferred:  until ${deferred.defer_until}`);
+  expect((await run(["defer", task.id, "--until", "2001-01-01T00:00:00Z"])).stderr).toBe("error: until must be in the future\n");
+  expect(await json(["defer", task.id, "--until", "2999-01-01T00:00:00Z"])).toMatchObject({ defer_until: "2999-01-01T00:00:00.000Z" });
+  expect(await json(["defer", task.id])).toMatchObject({ status: "deferred", defer_until: null });
+  expect((await run(["undefer", task.id])).stdout).toBe(`undeferred ${task.id}\n`);
+  expect((await json(["ready"])).map((b: any) => b.id)).toEqual([task.id, epic.id]);
+});
+
 test("errors, help and connection failures", async () => {
   const help = await bn([]);
   expect(help.code).toBe(0);
   expect(help.stdout).toContain("bn claim [id]");
-  expect(help.stdout).not.toContain("defer");
+  expect(help.stdout).toContain("bn defer <id> [--until");
   expect((await bn(["close", "--help"])).stdout).toContain("usage: bn close <id...> [-r reason]");
 
   const unknown = await bn(["frobnicate"]);
