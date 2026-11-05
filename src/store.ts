@@ -275,7 +275,10 @@ export class Store {
     return this.op(() => {
       const boon = this.mustGet(id);
       const graph = this.graph();
-      const summaries = (ids: string[]) => [...new Set(ids)].map((id) => summary(graph.boons.get(id)!));
+      const summaries = (ids: string[]) => [...new Set(ids)]
+        .map((id) => graph.boons.get(id)!)
+        .sort((a, b) => a.project.localeCompare(b.project) || Number(a.id.split("-")[1]) - Number(b.id.split("-")[1]))
+        .map(summary);
       const outgoing = (kind: LinkKind) => graph.links.filter((l) => l.boon_id === boon.id && l.kind === kind).map((l) => l.target_id);
       const incoming = (kind: LinkKind) => graph.links.filter((l) => l.target_id === boon.id && l.kind === kind).map((l) => l.boon_id);
       const comments = this.db.query(`SELECT ${COMMENT_COLUMNS} FROM comments WHERE boon_id = ? ORDER BY id`).all(boon.id) as Comment[];

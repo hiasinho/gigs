@@ -1,0 +1,5 @@
+interface:
+  display_name: "Boons"
+  short_description: "Track, claim, and finish work with bn"
+policy:
+  allow_implicit_invocation: true

@@ -195,11 +195,40 @@ test("update, heartbeat, defer and comments through the real CLI", async () => {
   expect((await json(["ready"])).map((b: any) => b.id)).toEqual([task.id, epic.id]);
 });
 
+test("show prints every relation on its own indented line, with numeric ordering", async () => {
+  store.createProject("sh");
+  for (let n = 1; n <= 16; n++) store.createBoon("sh", "fixture", { title: `Boon ${n}` });
+  store.update("sh-2", "fixture", { parent: "sh-1" });
+  store.update("sh-10", "fixture", { parent: "sh-2" });
+  store.update("sh-3", "fixture", { parent: "sh-2" });
+  store.close("sh-3", "fixture");
+  for (const id of ["sh-11", "sh-4"]) store.addLink("sh-2", id, "blocks", "fixture");
+  for (const id of ["sh-12", "sh-5"]) store.addLink(id, "sh-2", "blocks", "fixture");
+  store.addLink("sh-2", "sh-13", "related", "fixture");
+  store.addLink("sh-6", "sh-2", "related", "fixture");
+  for (const id of ["sh-14", "sh-7"]) store.addLink("sh-2", id, "discovered-from", "fixture");
+  for (const id of ["sh-15", "sh-8"]) store.addLink(id, "sh-2", "discovered-from", "fixture");
+
+  const json = await bnJson(["show", "sh-2"]);
+  expect(json.children.map((b: any) => b.id)).toEqual(["sh-3", "sh-10"]);
+  const human = await bn(["show", "sh-2"]);
+  expect(human.code).toBe(0);
+  expect(human.stdout).toContain(`parent:\n  sh-1  open  Boon 1\nchildren:\n  sh-3  closed  Boon 3\n  sh-10  open  Boon 10\nblockers:\n  sh-4  open  Boon 4\n  sh-11  open  Boon 11\nblocks:\n  sh-5  open  Boon 5\n  sh-12  open  Boon 12\nrelated:\n  sh-6  open  Boon 6\n  sh-13  open  Boon 13\ndiscovered_from:\n  sh-7  open  Boon 7\n  sh-14  open  Boon 14\ndiscovered:\n  sh-8  open  Boon 8\n  sh-15  open  Boon 15\n`);
+});
+
 test("errors, help and connection failures", async () => {
   const help = await bn([]);
   expect(help.code).toBe(0);
   expect(help.stdout).toContain("bn claim [id]");
   expect(help.stdout).toContain("bn defer <id> [--until");
+  expect(help.stdout.split("\n").every((line) => line.length <= 80)).toBe(true);
+  expect((await bn(["help"])).stdout).toBe(help.stdout);
+  expect(help.stdout).toContain("  bn ready\n    ready boons in priority order\n");
+  const createHelp = await bn(["create", "--help"]);
+  expect(createHelp.code).toBe(0);
+  expect(createHelp.stdout.split("\n").every((line) => line.length <= 80)).toBe(true);
+  expect(createHelp.stdout).toContain("[--discovered-from id]");
+  expect(createHelp.stdout).toContain("create a boon and print its id");
   expect((await bn(["close", "--help"])).stdout).toContain("usage: bn close <id...> [-r reason]");
 
   const unknown = await bn(["frobnicate"]);

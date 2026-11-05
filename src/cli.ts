@@ -304,9 +304,23 @@ const COMMANDS: Record<string, Command> = {
 
 };
 
+function wrapHelp(text: string, indent: string, continuation = indent): string {
+  const lines: string[] = [];
+  let line = indent;
+  for (const word of text.split(" ")) {
+    if (line.length + word.length + 1 > 80 && line !== indent) {
+      lines.push(line);
+      line = continuation;
+    }
+    line += (line.trim() ? " " : "") + word;
+  }
+  return [...lines, line].join("\n");
+}
+
 function usage() {
-  const w = Math.max(...Object.values(COMMANDS).map((c) => c.usage.length));
-  const lines = Object.values(COMMANDS).map((c) => `  bn ${c.usage.padEnd(w)}  ${c.summary}`);
+  const lines = Object.values(COMMANDS).map((c) =>
+    `${wrapHelp(`bn ${c.usage}`, "  ", "    ")}\n${wrapHelp(c.summary, "    ")}`,
+  );
   return `bn - boons, a ticket system for coding agents
 
 usage:
@@ -316,7 +330,8 @@ ${lines.join("\n")}
 global options:
   --json             print the API JSON instead of human output
   --as <actor>       act as <actor> (default: $BN_ACTOR, then $USER)
-  -P, --project <p>  project prefix (default: $BN_PROJECT, then nearest .boons.json)
+  -P, --project <p>  project prefix
+                     (default: $BN_PROJECT, then nearest .boons.json)
 
 env: BOONS_URL (default http://127.0.0.1:7357), BOONS_TOKEN`;
 }
@@ -345,7 +360,7 @@ export async function main(argv: string[]) {
   }
   const values = parsed.values as Values;
   if (values.help) {
-    console.log(`usage: bn ${command.usage}\n\n${command.summary}`);
+    console.log(`${wrapHelp(`usage: bn ${command.usage}`, "", "  ")}\n\n${wrapHelp(command.summary, "")}`);
     return;
   }
 
@@ -456,9 +471,14 @@ function showDetail(detail: BoonDetail): string {
   field("updated", b.updated_at);
   if (b.closed_at) field("closed", `${b.closed_at} by ${b.closed_by}${b.close_reason ? `: ${b.close_reason}` : ""}`);
   if (!ready) field("not ready", reasons.length ? reasonText(reasons) : `status is ${b.status}`);
-  if (detail.parent) field("parent", `${detail.parent.id} ${detail.parent.title}`);
+  const relation = (label: string, boons: BoonDetail["children"]) => {
+    if (!boons.length) return;
+    lines.push(`${label}:`);
+    for (const boon of boons) lines.push(`  ${boon.id}  ${boon.status}  ${boon.title}`);
+  };
+  if (detail.parent) relation("parent", [detail.parent]);
   for (const key of ["children", "blockers", "blocks", "related", "discovered_from", "discovered"] as const) {
-    if (detail[key].length) field(key, detail[key].map((b) => `${b.id} (${b.status}) ${b.title}`).join(", "));
+    relation(key, detail[key]);
   }
   if (b.description) lines.push("", b.description);
   if (detail.comments.length) {

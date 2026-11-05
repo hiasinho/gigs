@@ -127,6 +127,32 @@ describe("list and ready", () => {
   });
 });
 
+test.each(["children", "blockers", "blocks", "related", "discovered_from", "discovered"] as const)(
+  "detail orders %s by project then numeric id",
+  (relation) => {
+    const center = store.createBoon("bn", "a", { title: "Center" });
+    for (const project of ["aa", "zz"]) {
+      store.createProject(project);
+      for (let n = 1; n <= 10; n++) store.createBoon(project, "a", { title: `${project} ${n}` });
+    }
+    // Insert out of order, including both directions of symmetric related links.
+    const ids = ["zz-10", "aa-10", "zz-2", "aa-2"];
+    for (const [index, id] of ids.entries()) {
+      switch (relation) {
+        case "children": store.update(id, "a", { parent: center.id }); break;
+        case "blockers": store.addLink(center.id, id, "blocks", "a"); break;
+        case "blocks": store.addLink(id, center.id, "blocks", "a"); break;
+        case "related":
+          store.addLink(index % 2 ? id : center.id, index % 2 ? center.id : id, "related", "a");
+          break;
+        case "discovered_from": store.addLink(center.id, id, "discovered-from", "a"); break;
+        case "discovered": store.addLink(id, center.id, "discovered-from", "a"); break;
+      }
+    }
+    expect(store.getDetail(center.id)[relation].map((b) => b.id)).toEqual(["aa-2", "aa-10", "zz-2", "zz-10"]);
+  },
+);
+
 describe("claims", () => {
   test("claim sets holder; same actor re-claim renews; others conflict", () => {
     store.createBoon("bn", "a", { title: "x" });
