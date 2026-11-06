@@ -5,7 +5,7 @@ description: Boons ticket system via `bn` CLI. Use when repo has .boons.json, or
 
 # Boons (`bn`)
 Ticket system. Ticket = boon, id like `bn-42`.
-Every call: `BN_ACTOR=<you> bn …`, unique name per agent (e.g. `claude-auth`).
+Every call: `bn … --as <you>`, unique name per agent (e.g. `claude-auth`).
 Output: JSON, empty fields omitted; `--full` = all fields. Syntax: `bn help`, `bn <cmd> --help`.
 
 ## Loop
