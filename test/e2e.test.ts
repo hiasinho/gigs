@@ -43,7 +43,7 @@ async function bn(args: string[], opts: { cwd?: string; stdin?: string; env?: Re
 }
 
 async function bnJson(args: string[], opts?: Parameters<typeof bn>[1]) {
-  const r = await bn([...args, "--json"], opts);
+  const r = await bn(args, opts);
   if (r.code !== 0) throw new Error(`bn ${args.join(" ")} failed: ${r.stderr}`);
   return JSON.parse(r.stdout);
 }
@@ -70,7 +70,7 @@ test("full workflow through the CLI", async () => {
   expect(first).toEqual({ id: "bn-1", title: "Fix the login", type: "bug", priority: 1, status: "open" });
   const second = await bnJson(["create", "Write docs", "-d", "-", "--full"], { stdin: "Long\ndescription\n" });
   expect(second).toMatchObject({ id: "bn-2", description: "Long\ndescription", priority: 2 });
-  expect((await bn(["create", "Plain", "-p", "P3"])).stdout.trim()).toBe("bn-3");
+  expect((await bn(["create", "Plain", "-p", "P3", "--human"])).stdout.trim()).toBe("bn-3");
 
   expect((await bnJson(["ready"])).map((b: any) => b.id)).toEqual(["bn-1", "bn-2", "bn-3"]);
 
@@ -106,10 +106,10 @@ test("full workflow through the CLI", async () => {
 });
 
 test("human output", async () => {
-  const list = await bn(["list"]);
+  const list = await bn(["--human", "list"]);
   expect(list.code).toBe(0);
   expect(list.stdout).toBe("bn-1  P1  in_progress  bug      Fix the login  [@agent-1]\nbn-3  P3  in_progress  task     Plain  [@agent-1]\n");
-  const show = await bn(["show", "bn-2"]);
+  const show = await bn(["show", "bn-2", "--human"]);
   expect(show.stdout).toContain("bn-2  Write docs");
   expect(show.stdout).toContain("task · P2 · closed by agent-1: done");
   expect(show.stdout).toContain("Long\ndescription");
@@ -124,7 +124,7 @@ test("links, blocked derivation, parent filters and force close through the real
   const parent = await json(["create", "Parent", "--blocked-by", blocker.id]);
   const child = await json(["create", "Child", "--parent", parent.id, "--discovered-from", blocker.id]);
   expect((await json(["list", "--parent", parent.id])).map((b: any) => b.id)).toEqual([child.id]);
-  expect((await bn(["dep", "add", child.id.toUpperCase(), blocker.id], { cwd })).stdout).toBe(`${child.id} is now blocked by ${blocker.id}\n`);
+  expect((await bn(["dep", "add", child.id.toUpperCase(), blocker.id, "--human"], { cwd })).stdout).toBe(`${child.id} is now blocked by ${blocker.id}\n`);
   expect(await json(["dep", "add", child.id, blocker.id])).toEqual({ id: child.id, title: "Child", type: "task", priority: 2, status: "open", parent: parent.id });
   const detail = await json(["dep", "add", child.id, blocker.id, "--full"]);
   expect(detail.blockers.map((b: any) => b.id)).toEqual([blocker.id]);
@@ -145,14 +145,14 @@ test("links, blocked derivation, parent filters and force close through the real
     blockers: [{ id: blocker.id, title: "Blocker", status: "open" }],
     discovered_from: [{ id: blocker.id, title: "Blocker", status: "open" }],
   });
-  const human = await bn(["show", child.id], { cwd });
+  const human = await bn(["show", child.id, "--human"], { cwd });
   expect(human.stdout).toContain(`not ready: blocked by ${blocker.id}; inherits blocker ${blocker.id} via ${parent.id}`);
   expect(human.stdout).toContain("parent:");
   const cycle = await bn(["dep", "add", blocker.id, child.id], { cwd });
   expect(cycle.code).toBe(1);
   expect(cycle.stderr).toContain("cycle");
   expect((await bn(["claim", child.id], { cwd })).stderr).toContain("not ready");
-  expect((await bn(["dep", "rm", child.id, blocker.id], { cwd })).stdout).toBe(`${child.id} is no longer blocked by ${blocker.id}\n`);
+  expect((await bn(["dep", "rm", child.id, blocker.id, "--human"], { cwd })).stdout).toBe(`${child.id} is no longer blocked by ${blocker.id}\n`);
   await json(["dep", "add", child.id, blocker.id, "--kind", "related"]);
   expect((await json(["show", blocker.id])).related.map((b: any) => b.id)).toEqual([child.id]);
   await json(["dep", "rm", blocker.id, child.id, "--kind", "related"]);
@@ -192,7 +192,7 @@ test("update, heartbeat, defer and comments through the real CLI", async () => {
   await json(["comment", task.id, "-"], { stdin: "multi\nline\n", env: { BN_ACTOR: "agent-2" } });
   const shown = await json(["show", task.id]);
   expect(shown.comments.map((c: any) => [c.author, c.body])).toEqual([["agent-1", "halfway there"], ["agent-2", "multi\nline"]]);
-  const human = (await run(["show", task.id, "--full"])).stdout;
+  const human = (await run(["show", task.id, "--full", "--human"])).stdout;
   expect(human).toMatch(/claimed:   by agent-1 at \S+, expires \S+/);
   expect(human).toMatch(/comments:\n  \S+ agent-1:\n    halfway there\n  \S+ agent-2:\n    multi\n    line/);
 
@@ -203,8 +203,8 @@ test("update, heartbeat, defer and comments through the real CLI", async () => {
   expect(until - before).toBeGreaterThanOrEqual(2 * 3_600_000 - 1000);
   expect(until - before).toBeLessThan(2 * 3_600_000 + 60_000);
   expect((await json(["ready"])).map((b: any) => b.id)).toEqual([epic.id]);
-  expect((await run(["list"])).stdout).toContain(`[until ${deferred.defer_until}]`);
-  expect((await run(["show", task.id, "--full"])).stdout).toContain(`deferred:  until ${deferred.defer_until}`);
+  expect((await run(["list", "--human"])).stdout).toContain(`[until ${deferred.defer_until}]`);
+  expect((await run(["show", task.id, "--full", "--human"])).stdout).toContain(`deferred:  until ${deferred.defer_until}`);
   expect((await run(["defer", task.id, "--until", "2001-01-01T00:00:00Z"])).stderr).toBe("error: until must be in the future\n");
   expect(await json(["defer", task.id, "--until", "2999-01-01T00:00:00Z"])).toMatchObject({ defer_until: "2999-01-01T00:00:00.000Z" });
   const day = await json(["defer", task.id, "--until", "2999-03-04"]);
@@ -216,7 +216,7 @@ test("update, heartbeat, defer and comments through the real CLI", async () => {
   expect((await json(["defer", task.id, "--until", "2999-03-04T10:30:15"])).defer_until).toBe(new Date(2999, 2, 4, 10, 30, 15).toISOString());
   expect((await run(["defer", task.id, "--until", "2999-02-30T10:00"])).stderr).toBe("error: invalid date: 2999-02-30T10:00\n");
   expect(await json(["defer", task.id])).toEqual({ id: task.id, title: "Better task", type: "bug", priority: 0, status: "deferred" });
-  expect((await run(["undefer", task.id])).stdout).toBe(`undeferred ${task.id}\n`);
+  expect((await run(["undefer", task.id, "--human"])).stdout).toBe(`undeferred ${task.id}\n`);
   expect((await json(["ready"])).map((b: any) => b.id)).toEqual([task.id, epic.id]);
 });
 
@@ -236,7 +236,7 @@ test("show --full prints every relation on its own indented line, with numeric o
 
   const json = await bnJson(["show", "sh-2", "--full"]);
   expect(json.children.map((b: any) => b.id)).toEqual(["sh-3", "sh-10"]);
-  const human = await bn(["show", "sh-2", "--full"]);
+  const human = await bn(["show", "sh-2", "--full", "--human"]);
   expect(human.code).toBe(0);
   expect(human.stdout).toContain(`parent:\n  sh-1  open  Boon 1\nchildren:\n  sh-3  closed  Boon 3\n  sh-10  open  Boon 10\nblockers:\n  sh-4  open  Boon 4\n  sh-11  open  Boon 11\nblocks:\n  sh-5  open  Boon 5\n  sh-12  open  Boon 12\nrelated:\n  sh-6  open  Boon 6\n  sh-13  open  Boon 13\ndiscovered_from:\n  sh-7  open  Boon 7\n  sh-14  open  Boon 14\ndiscovered:\n  sh-8  open  Boon 8\n  sh-15  open  Boon 15\n`);
 });
@@ -244,7 +244,7 @@ test("show --full prints every relation on its own indented line, with numeric o
 test("compact show covers statuses, relations and multiline comments without audit timestamps", async () => {
   store.createProject("co");
   const run = async (id: string, flags: string[] = []) => {
-    const result = await bn(["show", id, ...flags], { env: { TZ: "UTC" } });
+    const result = await bn(["show", id, "--human", ...flags], { env: { TZ: "UTC" } });
     expect(result.code).toBe(0);
     expect(result.stderr).toBe("");
     return result.stdout;
@@ -313,11 +313,15 @@ test("compact JSON shapes for agents, and --full prints the raw API response", a
   store.addComment(epic.id, "agent-2", "first\nsecond");
 
   // One line, no description in rows.
-  const ready = await bn(["ready", "--json"], { env });
+  const ready = await bn(["ready"], { env });
   expect(ready.stdout).toBe(
     `[{"id":"${blocker.id}","title":"Blocker","type":"task","priority":0,"status":"open"},` +
     `{"id":"${a.id}","title":"A","type":"task","priority":2,"status":"open","parent":"${epic.id}"}]\n`,
   );
+  expect((await bn(["ready", "--json"], { env })).stdout).toBe(ready.stdout);
+  // The legacy flag is a no-op, including when human output is requested.
+  expect((await bn(["ready", "--human", "--json"], { env })).stdout)
+    .toBe((await bn(["ready", "--human"], { env })).stdout);
   expect(await json(["list", "--status", "closed"])).toEqual([
     { id: c.id, title: "C", type: "task", priority: 2, status: "closed", parent: epic.id, close_reason: "done" },
   ]);
@@ -356,9 +360,9 @@ test("compact JSON shapes for agents, and --full prints the raw API response", a
   expect(await json(["claim"])).toBeNull();
   expect(await json(["claim", "--full"])).toBeNull();
 
-  // --json --full prints exactly what the API returns, on one line.
+  // --full prints exactly what the API returns, on one line.
   const api = async (path: string) => (await fetch(new URL(path, server.url), { headers: { Authorization: "Bearer t0k" } })).json();
-  const raw = await bn(["show", epic.id, "--json", "--full"], { env });
+  const raw = await bn(["show", epic.id, "--full"], { env });
   expect(raw.stdout.trim().split("\n")).toHaveLength(1);
   expect(JSON.parse(raw.stdout)).toEqual(await api(`/boons/${epic.id}`));
   expect(await json(["list", "--all", "--full"])).toEqual(await api("/projects/js/boons?all=1"));
@@ -371,8 +375,8 @@ test("CLI rejects missing global values, unknown global flags and surplus positi
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("error:");
   }
-  expect((await bn(["--as", "early-actor", "--project=bn", "ready", "--json"])).code).toBe(0);
-  expect((await bn(["--json"])).code).toBe(0);
+  expect((await bn(["--as", "early-actor", "--project=bn", "ready"])).code).toBe(0);
+  expect((await bn(["--human"])).code).toBe(0);
 });
 
 test("not-ready claim errors are readable and API reasons stay structured", async () => {
@@ -391,6 +395,11 @@ test("not-ready claim errors are readable and API reasons stay structured", asyn
 test("errors, help and connection failures", async () => {
   const help = await bn([]);
   expect(help.code).toBe(0);
+  expect(help.stdout).toContain("output: compact JSON by default");
+  expect(help.stdout).toContain("--human");
+  expect((await bn(["help", "--human"])).stdout).toBe(help.stdout);
+  expect((await bn(["show", "--help", "--human"])).stdout)
+    .toBe((await bn(["show", "--help"])).stdout);
   expect(help.stdout).toContain("bn claim [id]");
   expect(help.stdout).toContain("bn defer <id> [--until");
   expect(help.stdout.split("\n").every((line) => line.length <= 80)).toBe(true);
@@ -401,7 +410,7 @@ test("errors, help and connection failures", async () => {
   expect(createHelp.code).toBe(0);
   expect(createHelp.stdout.split("\n").every((line) => line.length <= 80)).toBe(true);
   expect(createHelp.stdout).toContain("[--discovered-from id]");
-  expect(createHelp.stdout).toContain("create a boon and print its id");
+  expect(createHelp.stdout).toContain("create a boon");
   expect((await bn(["close", "--help"])).stdout).toContain("usage: bn close <id...> [-r reason]");
 
   const unknown = await bn(["frobnicate"]);
@@ -427,6 +436,8 @@ test("skill prints the agent skill without a server or project", async () => {
   const env = { BOONS_URL: "http://127.0.0.1:1" };
   const r = await bn(["skill"], { cwd: dir, env });
   expect(r).toEqual({ stdout: skill, stderr: "", code: 0 });
-  expect(await bnJson(["skill"], { cwd: dir, env })).toEqual({ name: "boons", content: skill });
+  for (const flag of ["--json", "--human", "--full"]) {
+    expect(await bn(["skill", flag], { cwd: dir, env })).toEqual(r);
+  }
   expect((await bn(["skill", "extra"], { cwd: dir, env })).code).toBe(1);
 });

@@ -130,14 +130,16 @@ bn comment <id> <text|->                                                 bn skil
 ```
 
 Types: `bug`, `feature`, `task`, `epic`, `chore`. Priority: `0` (critical) to `4` (backlog), default 2.
-`bn show <id>` is compact; `bn show <id> --full` shows everything, including timestamps and closed relations.
-`--json` prints compact JSON (see [For agents](#for-agents)); `--json --full` prints the raw API JSON.
+`bn show <id>` is compact; `bn show <id> --full` prints the raw API response, including timestamps and closed relations.
+Output is compact JSON by default (see [For agents](#for-agents)). Use `--human` for human-readable text,
+or `bn show <id> --human --full` for the complete text view.
+`bn help`, `bn <command> --help`, `bn skill`, and the server startup line remain plain text.
 `bn close --force` closes a parent despite unfinished children (they stay open).
 `bn help` and `bn <command> --help` have the details.
 
 ## For agents
 
-- Always pass `--json`. It prints one line of compact JSON with null and empty fields omitted:
+- Output defaults to one line of compact JSON with null and empty fields omitted:
   - `list`, `ready` and mutations (`create`, `update`, `close`, `defer`, `dep add`, ...) print rows:
     `{id, title, type, priority, status, parent?, claimed_by?, claim_expires_at?, defer_until?, close_reason?}`
     (`close` with several ids prints an array); `blocked` adds `reasons: [{kind, id, via?}]`.
@@ -146,7 +148,8 @@ Types: `bug`, `feature`, `task`, `epic`, `chore`. Priority: `0` (critical) to `4
     counts per relation, and `comments: [{author, at, body}]`. `claim` prints `null` if nothing is ready.
   - `comment` prints `{boon_id, author, at, body}`.
 - Add `--full` to get the raw API response instead (all fields, nested `{boon, ...}` for `show`).
-- Give every agent a unique actor name (`BN_ACTOR=claude-docs`), since claims are per actor.
+- Give every agent a unique actor name and pass `BN_ACTOR=claude-docs bn …` on every call,
+  since claims are per actor and shells do not persist exports between calls.
 - Long tasks: run `bn heartbeat <id>` (or comment) more often than the claim TTL, or the claim
   lapses and someone else may pick the boon up.
 - File work you find but won't do with `--discovered-from <your boon>`.

@@ -11,6 +11,7 @@ type Values = Record<string, string | boolean | undefined>;
 
 const GLOBAL_OPTIONS = {
   json: { type: "boolean" },
+  human: { type: "boolean" },
   full: { type: "boolean" },
   as: { type: "string" },
   project: { type: "string", short: "P" },
@@ -85,7 +86,7 @@ const COMMANDS: Record<string, Command> = {
 
   create: {
     usage: "create <title> [-t type] [-p 0-4] [-d desc|-] [--parent id] [--blocked-by id[,id]] [--discovered-from id]",
-    summary: "create a boon and print its id (`-d -` reads the description from stdin)",
+    summary: "create a boon (`-d -` reads the description from stdin)",
     options: {
       type: { type: "string", short: "t" },
       priority: { type: "string", short: "p" },
@@ -313,10 +314,8 @@ const COMMANDS: Record<string, Command> = {
   skill: {
     usage: "skill",
     summary: "print the agent skill (SKILL.md) that teaches the bn workflow",
-    async run({ json, print }) {
-      const content = readFileSync(SKILL_PATH, "utf8");
-      if (json) return print({ name: "boons", content });
-      process.stdout.write(content);
+    async run() {
+      process.stdout.write(readFileSync(SKILL_PATH, "utf8"));
     },
   },
 };
@@ -346,10 +345,12 @@ usage:
 ${lines.join("\n")}
   bn help | bn <command> --help
 
+output: compact JSON by default (one line, empty fields omitted)
+
 global options:
-  --json             print compact JSON for agents (one line, empty fields
-                     omitted)
-  --full             with --json: the raw API JSON; with show: everything
+  --human            print human-readable text instead of JSON
+  --json             optional legacy flag (JSON is already the default)
+  --full             raw API JSON; with --human: full show view
   --as <actor>       act as <actor> (default: $BN_ACTOR, then $USER)
   -P, --project <p>  project prefix
                      (default: $BN_PROJECT, then nearest .boons.json)
@@ -398,7 +399,7 @@ export async function main(argv: string[]) {
   await command.run({
     args: parsed.positionals,
     values,
-    json: values.json === true,
+    json: values.human !== true,
     full: values.full === true,
     print: (raw, shape) => console.log(JSON.stringify(shape && values.full !== true ? shape(raw) : raw)),
     client: () =>
