@@ -66,8 +66,9 @@ test("full workflow through the CLI", async () => {
   // Project is found from a subdirectory via .boons.json.
   const sub = join(repo, "sub");
   const first = await bnJson(["create", "Fix", "the", "login", "-t", "bug", "-p", "1"], { cwd: sub });
-  expect(first).toMatchObject({ id: "bn-1", title: "Fix the login", type: "bug", priority: 1, created_by: "agent-1" });
-  const second = await bnJson(["create", "Write docs", "-d", "-"], { stdin: "Long\ndescription\n" });
+  // Mutations print the compact row: no description, no nulls, no audit fields.
+  expect(first).toEqual({ id: "bn-1", title: "Fix the login", type: "bug", priority: 1, status: "open" });
+  const second = await bnJson(["create", "Write docs", "-d", "-", "--full"], { stdin: "Long\ndescription\n" });
   expect(second).toMatchObject({ id: "bn-2", description: "Long\ndescription", priority: 2 });
   expect((await bn(["create", "Plain", "-p", "P3"])).stdout.trim()).toBe("bn-3");
 
@@ -80,19 +81,24 @@ test("full workflow through the CLI", async () => {
   expect(conflict.code).toBe(1);
   expect(conflict.stderr).toMatch(/^error: bn-1 is already claimed by agent-2/);
 
-  expect(await bnJson(["show", "bn-1"])).toMatchObject({ boon: { id: "bn-1", status: "in_progress" }, ready: false, reasons: [] });
-  expect(await bnJson(["unclaim", "bn-1"])).toMatchObject({ status: "open", claimed_by: null });
+  expect(await bnJson(["show", "bn-1", "--full"])).toMatchObject({ boon: { id: "bn-1", status: "in_progress" }, ready: false, reasons: [] });
+  // Compact show of an in_progress boon: no ready/reasons, claim fields present.
+  expect(await bnJson(["show", "bn-1"])).toEqual({
+    id: "bn-1", title: "Fix the login", type: "bug", priority: 1, status: "in_progress",
+    claimed_by: "agent-2", claim_expires_at: expect.any(String),
+  });
+  expect(await bnJson(["unclaim", "bn-1"])).toEqual({ id: "bn-1", title: "Fix the login", type: "bug", priority: 1, status: "open" });
 
   // Close several at once; single id prints one object, several print an array.
   const closed = await bnJson(["close", "bn-1", "bn-2", "-r", "done"]);
-  expect(closed.map((b: any) => [b.id, b.status, b.close_reason])).toEqual([
-    ["bn-1", "closed", "done"],
-    ["bn-2", "closed", "done"],
+  expect(closed).toEqual([
+    { id: "bn-1", title: "Fix the login", type: "bug", priority: 1, status: "closed", close_reason: "done" },
+    { id: "bn-2", title: "Write docs", type: "task", priority: 2, status: "closed", close_reason: "done" },
   ]);
   expect((await bnJson(["list"])).map((b: any) => b.id)).toEqual(["bn-3"]);
   expect((await bnJson(["list", "--all"])).map((b: any) => b.id)).toEqual(["bn-1", "bn-2", "bn-3"]);
   expect((await bnJson(["list", "--status", "closed", "--type", "bug"])).map((b: any) => b.id)).toEqual(["bn-1"]);
-  expect(await bnJson(["reopen", "bn-1"])).toMatchObject({ id: "bn-1", status: "open", closed_at: null });
+  expect(await bnJson(["reopen", "bn-1", "--full"])).toMatchObject({ id: "bn-1", status: "open", closed_at: null });
 
   expect(await bnJson(["claim", "-P", "bn"])).toMatchObject({ id: "bn-1" });
   expect(await bnJson(["claim"])).toMatchObject({ id: "bn-3" });
@@ -119,15 +125,26 @@ test("links, blocked derivation, parent filters and force close through the real
   const child = await json(["create", "Child", "--parent", parent.id, "--discovered-from", blocker.id]);
   expect((await json(["list", "--parent", parent.id])).map((b: any) => b.id)).toEqual([child.id]);
   expect((await bn(["dep", "add", child.id.toUpperCase(), blocker.id], { cwd })).stdout).toBe(`${child.id} is now blocked by ${blocker.id}\n`);
-  const detail = await json(["dep", "add", child.id, blocker.id]);
+  expect(await json(["dep", "add", child.id, blocker.id])).toEqual({ id: child.id, title: "Child", type: "task", priority: 2, status: "open", parent: parent.id });
+  const detail = await json(["dep", "add", child.id, blocker.id, "--full"]);
   expect(detail.blockers.map((b: any) => b.id)).toEqual([blocker.id]);
   const blocked = await json(["blocked"]);
-  expect(blocked.map((e: any) => e.boon.id)).toEqual([parent.id, child.id]);
-  expect(blocked[1].reasons).toEqual([
-    { kind: "blocker", id: blocker.id }, { kind: "inherited", id: blocker.id, via: parent.id },
+  expect(blocked).toEqual([
+    { id: parent.id, title: "Parent", type: "task", priority: 2, status: "open", reasons: [{ kind: "blocker", id: blocker.id }, { kind: "child", id: child.id }] },
+    {
+      id: child.id, title: "Child", type: "task", priority: 2, status: "open", parent: parent.id,
+      reasons: [{ kind: "blocker", id: blocker.id }, { kind: "inherited", id: blocker.id, via: parent.id }],
+    },
   ]);
+  expect((await json(["blocked", "--full"]))[1]).toMatchObject({ boon: { id: child.id, claimed_by: null } });
   const shown = await json(["show", child.id]);
-  expect(shown).toMatchObject({ parent: { id: parent.id }, discovered_from: [{ id: blocker.id }], ready: false });
+  expect(shown).toEqual({
+    id: child.id, title: "Child", type: "task", priority: 2, status: "open", ready: false,
+    reasons: [{ kind: "blocker", id: blocker.id }, { kind: "inherited", id: blocker.id, via: parent.id }],
+    parent: { id: parent.id, title: "Parent", status: "open" },
+    blockers: [{ id: blocker.id, title: "Blocker", status: "open" }],
+    discovered_from: [{ id: blocker.id, title: "Blocker", status: "open" }],
+  });
   const human = await bn(["show", child.id], { cwd });
   expect(human.stdout).toContain(`not ready: blocked by ${blocker.id}; inherits blocker ${blocker.id} via ${parent.id}`);
   expect(human.stdout).toContain("parent:");
@@ -139,7 +156,7 @@ test("links, blocked derivation, parent filters and force close through the real
   await json(["dep", "add", child.id, blocker.id, "--kind", "related"]);
   expect((await json(["show", blocker.id])).related.map((b: any) => b.id)).toEqual([child.id]);
   await json(["dep", "rm", blocker.id, child.id, "--kind", "related"]);
-  expect((await json(["show", child.id])).related).toEqual([]);
+  expect((await json(["show", child.id])).related).toBeUndefined();
   expect((await bn(["close", parent.id], { cwd })).stderr).toContain("unfinished children");
   expect(await json(["close", parent.id, "--force"])).toMatchObject({ status: "closed" });
   await json(["close", blocker.id]);
@@ -158,8 +175,8 @@ test("update, heartbeat, defer and comments through the real CLI", async () => {
 
   expect(await json(["update", task.id, "--title", "Better task", "-p", "P0", "-t", "bug", "--parent", epic.id]))
     .toMatchObject({ title: "Better task", priority: 0, type: "bug", parent: epic.id });
-  expect(await json(["update", task.id, "-d", "-"], { stdin: "from stdin\n" })).toMatchObject({ description: "from stdin" });
-  expect(await json(["update", task.id, "--parent", "none"])).toMatchObject({ parent: null });
+  expect(await json(["update", task.id, "-d", "-", "--full"], { stdin: "from stdin\n" })).toMatchObject({ description: "from stdin" });
+  expect(await json(["update", task.id, "--parent", "none"])).toEqual({ id: task.id, title: "Better task", type: "bug", priority: 0, status: "open" });
   expect((await run(["update", task.id])).stderr).toContain("nothing to update");
   expect((await run(["update", task.id, "-t", "story"])).stderr).toContain("type must be one of");
   expect((await run(["update", epic.id, "--parent", epic.id])).stderr).toContain("cycle");
@@ -171,7 +188,7 @@ test("update, heartbeat, defer and comments through the real CLI", async () => {
   expect(stolen.code).toBe(1);
   expect(stolen.stderr).toBe(`error: ${task.id} is claimed by agent-1, not agent-2; only the holder can heartbeat\n`);
 
-  expect(await json(["comment", task.id, "halfway", "there"])).toMatchObject({ boon_id: task.id, author: "agent-1", body: "halfway there" });
+  expect(await json(["comment", task.id, "halfway", "there"])).toEqual({ boon_id: task.id, author: "agent-1", at: expect.any(String), body: "halfway there" });
   await json(["comment", task.id, "-"], { stdin: "multi\nline\n", env: { BN_ACTOR: "agent-2" } });
   const shown = await json(["show", task.id]);
   expect(shown.comments.map((c: any) => [c.author, c.body])).toEqual([["agent-1", "halfway there"], ["agent-2", "multi\nline"]]);
@@ -181,7 +198,7 @@ test("update, heartbeat, defer and comments through the real CLI", async () => {
 
   const before = Date.now();
   const deferred = await json(["defer", task.id, "--until", "2h"]);
-  expect(deferred).toMatchObject({ status: "deferred", claimed_by: null });
+  expect(deferred).toEqual({ id: task.id, title: "Better task", type: "bug", priority: 0, status: "deferred", defer_until: expect.any(String) });
   const until = Date.parse(deferred.defer_until);
   expect(until - before).toBeGreaterThanOrEqual(2 * 3_600_000 - 1000);
   expect(until - before).toBeLessThan(2 * 3_600_000 + 60_000);
@@ -198,7 +215,7 @@ test("update, heartbeat, defer and comments through the real CLI", async () => {
   expect(local.defer_until).toBe(new Date(2999, 2, 4, 10, 30).toISOString());
   expect((await json(["defer", task.id, "--until", "2999-03-04T10:30:15"])).defer_until).toBe(new Date(2999, 2, 4, 10, 30, 15).toISOString());
   expect((await run(["defer", task.id, "--until", "2999-02-30T10:00"])).stderr).toBe("error: invalid date: 2999-02-30T10:00\n");
-  expect(await json(["defer", task.id])).toMatchObject({ status: "deferred", defer_until: null });
+  expect(await json(["defer", task.id])).toEqual({ id: task.id, title: "Better task", type: "bug", priority: 0, status: "deferred" });
   expect((await run(["undefer", task.id])).stdout).toBe(`undeferred ${task.id}\n`);
   expect((await json(["ready"])).map((b: any) => b.id)).toEqual([task.id, epic.id]);
 });
@@ -217,7 +234,7 @@ test("show --full prints every relation on its own indented line, with numeric o
   for (const id of ["sh-14", "sh-7"]) store.addLink("sh-2", id, "discovered-from", "fixture");
   for (const id of ["sh-15", "sh-8"]) store.addLink(id, "sh-2", "discovered-from", "fixture");
 
-  const json = await bnJson(["show", "sh-2"]);
+  const json = await bnJson(["show", "sh-2", "--full"]);
   expect(json.children.map((b: any) => b.id)).toEqual(["sh-3", "sh-10"]);
   const human = await bn(["show", "sh-2", "--full"]);
   expect(human.code).toBe(0);
@@ -243,10 +260,8 @@ test("compact show covers statuses, relations and multiline comments without aud
   expect(await run(done.id)).toBe(`${done.id}  Finished child\ntask · P2 · closed by fixture: verified\nparent: ${epic.id} Epic\n`);
   expect(await run(alsoDone.id)).toContain("task · P2 · closed by fixture\n");
 
-  // JSON remains identical, even with --full. The old complete renderer is exact.
-  const detail = await bnJson(["show", task.id]);
-  expect(await bnJson(["show", task.id, "--full"])).toEqual(detail);
-  const b = detail.boon;
+  // The old complete renderer is exact.
+  const b = (await bnJson(["show", task.id, "--full"])).boon;
   expect(await run(task.id, ["--full"])).toBe(
     `${task.id}  Task\n\nstatus:    open (ready)\ntype:      task\npriority:  P1\ncreated:   ${b.created_at} by fixture\nupdated:   ${b.updated_at}\nparent:\n  ${epic.id}  open  Epic\n\nFirst\nsecond\n`,
   );
@@ -281,6 +296,73 @@ test("compact show covers statuses, relations and multiline comments without aud
   await bnJson(["close", task.id]);
   const closedEpic = await run(epic.id);
   expect(closedEpic).toBe(`${epic.id}  Epic\nepic · P2 · ready\nchildren: 3 closed\n`);
+});
+
+test("compact JSON shapes for agents, and --full prints the raw API response", async () => {
+  store.createProject("js");
+  const env = { BN_PROJECT: "js" };
+  const json = (args: string[], actor = "agent-1") => bnJson(args, { env: { ...env, BN_ACTOR: actor } });
+  const epic = store.createBoon("js", "fixture", { title: "Epic", type: "epic", priority: 1, description: "The plan" });
+  const a = store.createBoon("js", "fixture", { title: "A", parent: epic.id, description: "long text" });
+  const b = store.createBoon("js", "fixture", { title: "B", parent: epic.id });
+  const c = store.createBoon("js", "fixture", { title: "C", parent: epic.id });
+  const blocker = store.createBoon("js", "fixture", { title: "Blocker", priority: 0 });
+  store.addLink(b.id, blocker.id, "blocks", "fixture");
+  store.addLink(epic.id, blocker.id, "related", "fixture");
+  store.close(c.id, "fixture", "done");
+  store.addComment(epic.id, "agent-2", "first\nsecond");
+
+  // One line, no description in rows.
+  const ready = await bn(["ready", "--json"], { env });
+  expect(ready.stdout).toBe(
+    `[{"id":"${blocker.id}","title":"Blocker","type":"task","priority":0,"status":"open"},` +
+    `{"id":"${a.id}","title":"A","type":"task","priority":2,"status":"open","parent":"${epic.id}"}]\n`,
+  );
+  expect(await json(["list", "--status", "closed"])).toEqual([
+    { id: c.id, title: "C", type: "task", priority: 2, status: "closed", parent: epic.id, close_reason: "done" },
+  ]);
+  expect(await json(["blocked"])).toEqual([
+    { id: epic.id, title: "Epic", type: "epic", priority: 1, status: "open", reasons: [{ kind: "child", id: a.id }, { kind: "child", id: b.id }] },
+    { id: b.id, title: "B", type: "task", priority: 2, status: "open", parent: epic.id, reasons: [{ kind: "blocker", id: blocker.id }] },
+  ]);
+
+  // Open, not ready: reasons, unfinished relations, closed counts, comments.
+  expect(await json(["show", epic.id])).toEqual({
+    id: epic.id, title: "Epic", type: "epic", priority: 1, status: "open", description: "The plan", ready: false,
+    reasons: [{ kind: "child", id: a.id }, { kind: "child", id: b.id }],
+    children: [{ id: a.id, title: "A", status: "open" }, { id: b.id, title: "B", status: "open" }],
+    related: [{ id: blocker.id, title: "Blocker", status: "open" }],
+    closed: { children: 1 },
+    comments: [{ author: "agent-2", at: expect.any(String), body: "first\nsecond" }],
+  });
+
+  // claim returns the show shape; the claim lands on the next ready boon.
+  const claimed = await json(["claim"]);
+  expect(claimed).toEqual({
+    id: blocker.id, title: "Blocker", type: "task", priority: 0, status: "in_progress",
+    claimed_by: "agent-1", claim_expires_at: expect.any(String),
+    blocks: [{ id: b.id, title: "B", status: "open" }],
+    related: [{ id: epic.id, title: "Epic", status: "open" }],
+  });
+  expect(await json(["show", blocker.id])).toEqual(claimed);
+  expect(await json(["close", blocker.id])).toEqual({ id: blocker.id, title: "Blocker", type: "task", priority: 0, status: "closed" });
+  const shownB = await json(["show", b.id]);
+  expect(shownB).toEqual({
+    id: b.id, title: "B", type: "task", priority: 2, status: "open", ready: true,
+    parent: { id: epic.id, title: "Epic", status: "open" }, closed: { blockers: 1 },
+  });
+  expect(await json(["claim", "--full"], "agent-2")).toMatchObject({ id: a.id, project: "js", claimed_by: "agent-2", closed_at: null });
+  await json(["claim", b.id]);
+  expect(await json(["claim"])).toBeNull();
+  expect(await json(["claim", "--full"])).toBeNull();
+
+  // --json --full prints exactly what the API returns, on one line.
+  const api = async (path: string) => (await fetch(new URL(path, server.url), { headers: { Authorization: "Bearer t0k" } })).json();
+  const raw = await bn(["show", epic.id, "--json", "--full"], { env });
+  expect(raw.stdout.trim().split("\n")).toHaveLength(1);
+  expect(JSON.parse(raw.stdout)).toEqual(await api(`/boons/${epic.id}`));
+  expect(await json(["list", "--all", "--full"])).toEqual(await api("/projects/js/boons?all=1"));
+  expect(await json(["projects"])).toEqual(await api("/projects"));
 });
 
 test("CLI rejects missing global values, unknown global flags and surplus positionals", async () => {

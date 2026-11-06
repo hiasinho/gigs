@@ -30,8 +30,12 @@ Use `bn claim` without an id to atomically claim the next ready boon. Claim befo
 
 Claims lapse after about 60 minutes without holder activity (server-configurable). Any update, comment, or link change by the holder renews the claim. During long work, run `BN_ACTOR=pi-auth bn heartbeat <id>` before it expires.
 
-`bn show <id>` is compact; add `--full` to show everything, including timestamps and closed relations.
-Use `--json` when parsing output, for example `BN_ACTOR=pi-auth bn ready --json`.
+Always add `--json`, for example `BN_ACTOR=pi-auth bn ready --json`. It prints one line of compact JSON; null and empty fields are omitted:
+
+- `list`, `ready`, and mutations print rows: `{id, title, type, priority, status, parent?, claimed_by?, claim_expires_at?, defer_until?, close_reason?}`. `close` with several ids prints an array. `blocked` adds `reasons`.
+- `show` and `claim` add `description`, `ready`/`reasons` (open boons only), `parent` and unfinished relations as `{id, title, status}`, `closed` counts per relation, and `comments: [{author, at, body}]`. `claim` prints `null` when nothing is ready.
+
+Add `--full` only when you need every field, such as timestamps or closed relations; with `--json` it prints the raw API response.
 
 ## File and connect work
 

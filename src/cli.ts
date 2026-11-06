@@ -4,13 +4,14 @@ import { dirname, join } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { Client, type BoonChangesInput } from "./client";
 import { configFromEnv, serve } from "./server";
-import { BoonsError, formatReasons as reasonText, type Boon, type BoonDetail, type LinkKind, type Project } from "./store";
+import { BoonsError, formatReasons as reasonText, type Boon, type BoonDetail, type BoonSummary, type LinkKind, type Project } from "./store";
 
 type Options = NonNullable<ParseArgsConfig["options"]>;
 type Values = Record<string, string | boolean | undefined>;
 
 const GLOBAL_OPTIONS = {
   json: { type: "boolean" },
+  full: { type: "boolean" },
   as: { type: "string" },
   project: { type: "string", short: "P" },
   help: { type: "boolean", short: "h" },
@@ -20,6 +21,9 @@ interface Ctx {
   args: string[];
   values: Values;
   json: boolean;
+  full: boolean;
+  /** Print JSON: `shape(raw)` by default, the raw API response with --full. */
+  print<T>(raw: T, shape?: (raw: T) => unknown): void;
   client(): Client;
   project(): string;
 }
@@ -46,7 +50,7 @@ const COMMANDS: Record<string, Command> = {
     usage: "init <prefix> [--name <name>]",
     summary: "create the project if missing (else just link it) and write ./.boons.json",
     options: { name: { type: "string" } },
-    async run({ args, values, json, client }) {
+    async run({ args, values, json, print, client }) {
       const prefix = arg(args, 0, "prefix");
       const c = client();
       let project: Project;
@@ -70,7 +74,7 @@ const COMMANDS: Record<string, Command> = {
   projects: {
     usage: "projects",
     summary: "list projects",
-    async run({ json, client }) {
+    async run({ json, print, client }) {
       const projects = await client().listProjects();
       if (json) return print(projects);
       if (!projects.length) return console.log("no projects");
@@ -90,7 +94,7 @@ const COMMANDS: Record<string, Command> = {
       "blocked-by": { type: "string" },
       "discovered-from": { type: "string" },
     },
-    async run({ args, values, json, client, project }) {
+    async run({ args, values, json, print, client, project }) {
       const title = args.join(" ");
       if (!title.trim()) throw new Error("missing <title>");
       const description = await readText(values.description as string | undefined);
@@ -103,7 +107,7 @@ const COMMANDS: Record<string, Command> = {
         blocked_by: (values["blocked-by"] as string | undefined)?.split(","),
         discovered_from: values["discovered-from"] as string | undefined,
       });
-      if (json) return print(boon);
+      if (json) return print(boon, row);
       console.log(boon.id);
     },
   },
@@ -117,14 +121,14 @@ const COMMANDS: Record<string, Command> = {
       type: { type: "string" },
       parent: { type: "string" },
     },
-    async run({ values, json, client, project }) {
+    async run({ values, json, print, client, project }) {
       const boons = await client().listBoons(project(), {
         all: values.all as boolean | undefined,
         status: values.status as string | undefined,
         parent: values.parent as string | undefined,
         type: values.type as string | undefined,
       });
-      if (json) return print(boons);
+      if (json) return print(boons, (list) => list.map(row));
       console.log(boons.length ? rows(boons) : "no boons");
     },
   },
@@ -132,9 +136,9 @@ const COMMANDS: Record<string, Command> = {
   ready: {
     usage: "ready",
     summary: "ready boons in priority order",
-    async run({ json, client, project }) {
+    async run({ json, print, client, project }) {
       const boons = await client().ready(project());
-      if (json) return print(boons);
+      if (json) return print(boons, (list) => list.map(row));
       console.log(boons.length ? rows(boons) : "no ready boons");
     },
   },
@@ -142,9 +146,9 @@ const COMMANDS: Record<string, Command> = {
   blocked: {
     usage: "blocked",
     summary: "blocked boons with reasons",
-    async run({ json, client, project }) {
+    async run({ json, print, client, project }) {
       const blocked = await client().blocked(project());
-      if (json) return print(blocked);
+      if (json) return print(blocked, (list) => list.map(({ boon, reasons }) => ({ ...row(boon), reasons })));
       console.log(blocked.length ? blocked.map(({ boon, reasons }) => `${rows([boon])}\n  ${reasonText(reasons)}`).join("\n") : "no blocked boons");
     },
   },
@@ -153,7 +157,7 @@ const COMMANDS: Record<string, Command> = {
     usage: "dep add|rm <id> <target-id> [--kind blocks|related|discovered-from]",
     summary: "add/remove a link (default: target blocks id)",
     options: { kind: { type: "string" } },
-    async run({ args, values, json, client }) {
+    async run({ args, values, json, print, client }) {
       const action = arg(args, 0, "add|rm");
       if (action !== "add" && action !== "rm") throw new Error("expected `bn dep add` or `bn dep rm`");
       const id = arg(args, 1, "id");
@@ -161,7 +165,7 @@ const COMMANDS: Record<string, Command> = {
       const kind = (values.kind as string | undefined) ?? "blocks";
       const c = client();
       const detail = action === "add" ? await c.addLink(id, target, kind) : await c.removeLink(id, target, kind);
-      if (json) return print(detail);
+      if (json) return print(detail, (d) => row(d.boon));
       const phrase = { blocks: "blocked by", related: "related to", "discovered-from": "discovered from" }[kind as LinkKind];
       console.log(`${detail.boon.id} is ${action === "add" ? "now" : "no longer"} ${phrase} ${target.toLowerCase()}`);
     },
@@ -170,11 +174,10 @@ const COMMANDS: Record<string, Command> = {
   show: {
     usage: "show <id> [--full]",
     summary: "show a compact boon (--full shows everything)",
-    options: { full: { type: "boolean" } },
-    async run({ args, values, json, client }) {
+    async run({ args, json, full, print, client }) {
       const detail = await client().getBoon(arg(args, 0, "id"));
-      if (json) return print(detail);
-      console.log(values.full ? showDetail(detail) : showCompactDetail(detail));
+      if (json) return print(detail, compactShow);
+      console.log(full ? showDetail(detail) : showCompactDetail(detail));
     },
   },
 
@@ -188,7 +191,7 @@ const COMMANDS: Record<string, Command> = {
       priority: { type: "string", short: "p" },
       parent: { type: "string" },
     },
-    async run({ args, values, json, client }) {
+    async run({ args, values, json, print, client }) {
       const id = arg(args, 0, "id");
       const changes: BoonChangesInput = {
         title: values.title as string | undefined,
@@ -199,7 +202,7 @@ const COMMANDS: Record<string, Command> = {
       };
       if (Object.values(changes).every((v) => v === undefined)) throw new Error("nothing to update (see `bn update --help`)");
       const boon = await client().update(id, changes);
-      if (json) return print(boon);
+      if (json) return print(boon, row);
       console.log(`updated ${boon.id}`);
     },
   },
@@ -207,9 +210,10 @@ const COMMANDS: Record<string, Command> = {
   claim: {
     usage: "claim [id]",
     summary: "claim the given boon, or the next ready one",
-    async run({ args, json, client, project }) {
-      const boon = args[0] ? await client().claim(args[0]) : await client().claimNext(project());
-      if (json) return print(boon);
+    async run({ args, json, full, print, client, project }) {
+      const c = client();
+      const boon = args[0] ? await c.claim(args[0]) : await c.claimNext(project());
+      if (json) return print(boon && !full ? compactShow(await c.getBoon(boon.id)) : boon);
       console.log(boon ? `claimed ${boon.id}: ${boon.title}` : "no ready boons");
     },
   },
@@ -217,9 +221,9 @@ const COMMANDS: Record<string, Command> = {
   unclaim: {
     usage: "unclaim <id>",
     summary: "release the claim on a boon",
-    async run({ args, json, client }) {
+    async run({ args, json, print, client }) {
       const boon = await client().unclaim(arg(args, 0, "id"));
-      if (json) return print(boon);
+      if (json) return print(boon, row);
       console.log(`unclaimed ${boon.id}`);
     },
   },
@@ -227,9 +231,9 @@ const COMMANDS: Record<string, Command> = {
   heartbeat: {
     usage: "heartbeat <id>",
     summary: "renew your claim on a boon",
-    async run({ args, json, client }) {
+    async run({ args, json, print, client }) {
       const boon = await client().heartbeat(arg(args, 0, "id"));
-      if (json) return print(boon);
+      if (json) return print(boon, row);
       console.log(`claim on ${boon.id} renewed until ${boon.claim_expires_at}`);
     },
   },
@@ -238,7 +242,7 @@ const COMMANDS: Record<string, Command> = {
     usage: "close <id...> [-r reason] [--force]",
     summary: "close one or more boons",
     options: { reason: { type: "string", short: "r" }, force: { type: "boolean" } },
-    async run({ args, values, json, client }) {
+    async run({ args, values, json, print, client }) {
       arg(args, 0, "id");
       const c = client();
       const closed: Boon[] = [];
@@ -254,7 +258,10 @@ const COMMANDS: Record<string, Command> = {
           failed = true;
         }
       }
-      if (json) print(args.length === 1 ? closed[0] : closed);
+      if (json) {
+        if (args.length === 1) print(closed[0]!, row);
+        else print(closed, (list) => list.map(row));
+      }
       if (failed) process.exitCode = 1;
     },
   },
@@ -262,9 +269,9 @@ const COMMANDS: Record<string, Command> = {
   reopen: {
     usage: "reopen <id>",
     summary: "reopen a closed boon",
-    async run({ args, json, client }) {
+    async run({ args, json, print, client }) {
       const boon = await client().reopen(arg(args, 0, "id"));
-      if (json) return print(boon);
+      if (json) return print(boon, row);
       console.log(`reopened ${boon.id}`);
     },
   },
@@ -272,10 +279,10 @@ const COMMANDS: Record<string, Command> = {
     usage: "defer <id> [--until <ISO time|YYYY-MM-DD|30m|4h|2d>]",
     summary: "set a boon aside (clears its claim), optionally until a time",
     options: { until: { type: "string" } },
-    async run({ args, values, json, client }) {
+    async run({ args, values, json, print, client }) {
       const until = values.until === undefined ? undefined : parseUntil(values.until as string);
       const boon = await client().defer(arg(args, 0, "id"), until);
-      if (json) return print(boon);
+      if (json) return print(boon, row);
       console.log(`deferred ${boon.id}${boon.defer_until ? ` until ${boon.defer_until}` : ""}`);
     },
   },
@@ -283,9 +290,9 @@ const COMMANDS: Record<string, Command> = {
   undefer: {
     usage: "undefer <id>",
     summary: "make a deferred boon open again",
-    async run({ args, json, client }) {
+    async run({ args, json, print, client }) {
       const boon = await client().undefer(arg(args, 0, "id"));
-      if (json) return print(boon);
+      if (json) return print(boon, row);
       console.log(`undeferred ${boon.id}`);
     },
   },
@@ -293,12 +300,12 @@ const COMMANDS: Record<string, Command> = {
   comment: {
     usage: "comment <id> <text|->",
     summary: "add a comment to a boon (`-` reads it from stdin)",
-    async run({ args, json, client }) {
+    async run({ args, json, print, client }) {
       const id = arg(args, 0, "id");
       const text = await readText(args.slice(1).join(" "));
       if (!text?.trim()) throw new Error("missing <text>");
       const comment = await client().comment(id, text);
-      if (json) return print(comment);
+      if (json) return print(comment, (c) => ({ boon_id: c.boon_id, author: c.author, at: c.created_at, body: c.body }));
       console.log(`commented on ${comment.boon_id}`);
     },
   },
@@ -306,7 +313,7 @@ const COMMANDS: Record<string, Command> = {
   skill: {
     usage: "skill",
     summary: "print the agent skill (SKILL.md) that teaches the bn workflow",
-    async run({ json }) {
+    async run({ json, print }) {
       const content = readFileSync(SKILL_PATH, "utf8");
       if (json) return print({ name: "boons", content });
       process.stdout.write(content);
@@ -340,7 +347,9 @@ ${lines.join("\n")}
   bn help | bn <command> --help
 
 global options:
-  --json             print the API JSON instead of human output
+  --json             print compact JSON for agents (one line, empty fields
+                     omitted)
+  --full             with --json: the raw API JSON; with show: everything
   --as <actor>       act as <actor> (default: $BN_ACTOR, then $USER)
   -P, --project <p>  project prefix
                      (default: $BN_PROJECT, then nearest .boons.json)
@@ -390,6 +399,8 @@ export async function main(argv: string[]) {
     args: parsed.positionals,
     values,
     json: values.json === true,
+    full: values.full === true,
+    print: (raw, shape) => console.log(JSON.stringify(shape && values.full !== true ? shape(raw) : raw)),
     client: () =>
       new Client({
         url: process.env.BOONS_URL || "http://127.0.0.1:7357",
@@ -459,8 +470,49 @@ function parseUntil(s: string): string {
   return new Date(Date.now() + ms).toISOString();
 }
 
-function print(value: unknown) {
-  console.log(JSON.stringify(value, null, 2));
+const RELATIONS = ["children", "blockers", "blocks", "related", "discovered_from", "discovered"] as const;
+
+/** Drop null/undefined/empty-string values and empty arrays/objects. */
+function compact(obj: Record<string, unknown>): Record<string, unknown> {
+  const empty = (v: unknown) =>
+    v == null || v === "" || (Array.isArray(v) ? !v.length : typeof v === "object" && !Object.keys(v).length);
+  return Object.fromEntries(Object.entries(obj).filter(([, v]) => !empty(v)));
+}
+
+/** The compact JSON row of a boon (list, ready, blocked, mutations). */
+function row(b: Boon) {
+  const claimed = b.status === "in_progress";
+  return compact({
+    id: b.id, title: b.title, type: b.type, priority: b.priority, status: b.status, parent: b.parent,
+    claimed_by: claimed ? b.claimed_by : null, claim_expires_at: claimed ? b.claim_expires_at : null,
+    defer_until: b.defer_until, close_reason: b.status === "closed" ? b.close_reason : null,
+  });
+}
+
+/** The compact JSON of `bn show`: unfinished relations listed, closed ones counted. */
+function compactShow(detail: BoonDetail) {
+  const { boon: b, ready, reasons } = detail;
+  const open = b.status === "open";
+  const claimed = b.status === "in_progress";
+  const summary = ({ id, title, status }: BoonSummary) => ({ id, title, status });
+  const relations: Record<string, unknown> = {};
+  const closed: Record<string, number> = {};
+  for (const key of RELATIONS) {
+    relations[key] = detail[key].filter((boon) => boon.status !== "closed").map(summary);
+    const n = detail[key].length - (relations[key] as unknown[]).length;
+    if (n) closed[key] = n;
+  }
+  return compact({
+    id: b.id, title: b.title, type: b.type, priority: b.priority, status: b.status, description: b.description,
+    ready: open ? ready : null, reasons: open && !ready ? reasons : null,
+    claimed_by: claimed ? b.claimed_by : null, claim_expires_at: claimed ? b.claim_expires_at : null,
+    defer_until: b.defer_until,
+    closed_by: b.status === "closed" ? b.closed_by : null, close_reason: b.status === "closed" ? b.close_reason : null,
+    parent: detail.parent && summary(detail.parent),
+    ...relations,
+    closed,
+    comments: detail.comments.map((c) => ({ author: c.author, at: c.created_at, body: c.body })),
+  });
 }
 
 function rows(boons: Boon[]): string {
@@ -497,7 +549,7 @@ function showCompactDetail(detail: BoonDetail): string {
   const lines = [`${b.id}  ${b.title}`, `${b.type} · P${b.priority} · ${status}`];
   if (detail.parent) lines.push(`parent: ${detail.parent.id} ${detail.parent.title}`);
   if (b.status === "open" && !ready) lines.push(`not ready: ${reasonText(reasons)}`);
-  for (const key of ["children", "blockers", "blocks", "related", "discovered_from", "discovered"] as const) {
+  for (const key of RELATIONS) {
     const unfinished = detail[key].filter((boon) => boon.status !== "closed");
     const closed = detail[key].length - unfinished.length;
     const label = key.replace("_", " ");
@@ -538,7 +590,7 @@ function showDetail(detail: BoonDetail): string {
     for (const boon of boons) lines.push(`  ${boon.id}  ${boon.status}  ${boon.title}`);
   };
   if (detail.parent) relation("parent", [detail.parent]);
-  for (const key of ["children", "blockers", "blocks", "related", "discovered_from", "discovered"] as const) {
+  for (const key of RELATIONS) {
     relation(key, detail[key]);
   }
   if (b.description) lines.push("", b.description);

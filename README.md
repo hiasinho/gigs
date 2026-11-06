@@ -131,12 +131,21 @@ bn comment <id> <text|->                                                 bn skil
 
 Types: `bug`, `feature`, `task`, `epic`, `chore`. Priority: `0` (critical) to `4` (backlog), default 2.
 `bn show <id>` is compact; `bn show <id> --full` shows everything, including timestamps and closed relations.
+`--json` prints compact JSON (see [For agents](#for-agents)); `--json --full` prints the raw API JSON.
 `bn close --force` closes a parent despite unfinished children (they stay open).
 `bn help` and `bn <command> --help` have the details.
 
 ## For agents
 
-- Pass `--json` to get the raw API JSON instead of human output.
+- Always pass `--json`. It prints one line of compact JSON with null and empty fields omitted:
+  - `list`, `ready` and mutations (`create`, `update`, `close`, `defer`, `dep add`, ...) print rows:
+    `{id, title, type, priority, status, parent?, claimed_by?, claim_expires_at?, defer_until?, close_reason?}`
+    (`close` with several ids prints an array); `blocked` adds `reasons: [{kind, id, via?}]`.
+  - `show` and `claim` print the boon with `description`, `ready`/`reasons` (open boons only),
+    claim/close fields, `parent` and relations as `{id, title, status}` (unfinished only), `closed`
+    counts per relation, and `comments: [{author, at, body}]`. `claim` prints `null` if nothing is ready.
+  - `comment` prints `{boon_id, author, at, body}`.
+- Add `--full` to get the raw API response instead (all fields, nested `{boon, ...}` for `show`).
 - Give every agent a unique actor name (`BN_ACTOR=claude-docs`), since claims are per actor.
 - Long tasks: run `bn heartbeat <id>` (or comment) more often than the claim TTL, or the claim
   lapses and someone else may pick the boon up.
