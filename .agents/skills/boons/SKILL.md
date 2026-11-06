@@ -5,7 +5,7 @@ description: Boons ticket system via `bn` CLI. Use when repo has .boons.json, or
 
 # Boons (`bn`)
 Ticket system. Ticket = boon, id like `bn-42`.
-Every call: `bn … --as <you>`. Pick once per session: agent name + random suffix (e.g. `claude-7f3a`), reuse it.
+Every call: `bn … --as <you>`. Pick a random name once per session (e.g. `a7f3c9`), reuse it.
 Output: JSON, empty fields omitted; `--full` = all fields. Syntax: `bn help`, `bn <cmd> --help`.
 
 ## Loop
