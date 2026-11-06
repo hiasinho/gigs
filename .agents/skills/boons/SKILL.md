@@ -13,10 +13,10 @@ Output: compact JSON, empty fields omitted. `--full` = raw API data, `--human` =
 bn ready                  # claimable now
 bn claim [id]             # atomic; no id = next ready; returns boon (description, relations, comments) or null
 # work
-bn comment <id> "<progress / handoff>"
-bn close <id> -r "<what was done, how verified>"
+bn comment <id> "<text>"
+bn close <id> [-r "<reason>"]
 ```
-Stopping unfinished: comment why, `bn unclaim <id>`.
+`bn unclaim <id>` releases a claim.
 Claim lapses after ~60 min without your activity; comment/update/link renews; long work: `bn heartbeat <id>`.
 
 ## File work
@@ -24,7 +24,6 @@ Claim lapses after ~60 min without your activity; comment/update/link renews; lo
 bn create "<title>" -t bug|feature|task|epic|chore -p 0-4 [--parent id] [--blocked-by id,id] [--discovered-from id] [-d text|-]
 ```
 p0 critical … p4 backlog, default 2. `-d -` reads stdin (heredoc for long text).
-Unrelated problem found mid-task: file it with `--discovered-from <current>`, don't detour.
 
 ## Other
 `show <id>` · `list [--all]` · `blocked` · `update <id> [--title t] [-d text|-] [-t type] [-p n] [--parent id|none]` · `dep add|rm <id> <blocker-id> [--kind related|discovered-from]` · `defer <id> [--until 4h|2d|YYYY-MM-DD]` · `undefer <id>` · `reopen <id>` · `projects`
