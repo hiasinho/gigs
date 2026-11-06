@@ -4,14 +4,14 @@ description: Boons ticket system via `bn` CLI. Use when repo has .boons.json, or
 ---
 
 # Boons (`bn`)
-Self-hosted ticket system. Ticket = boon, id like `bn-42`.
-Every call: `BN_ACTOR=<you> bn …`. Unique name per agent (e.g. `claude-auth`); exports don't persist between calls.
-Output: compact JSON, empty fields omitted. `--full` = raw API data, `--human` = text. Syntax: `bn help`, `bn <cmd> --help`.
+Ticket system. Ticket = boon, id like `bn-42`.
+Every call: `BN_ACTOR=<you> bn …`, unique name per agent (e.g. `claude-auth`).
+Output: JSON, empty fields omitted; `--full` = all fields. Syntax: `bn help`, `bn <cmd> --help`.
 
 ## Loop
 ```
 bn ready                  # claimable now
-bn claim [id]             # atomic; no id = next ready; returns boon (description, relations, comments) or null
+bn claim [id]             # no id = next ready; returns boon (description, relations, comments) or null
 # work
 bn comment <id> "<text>"
 bn close <id> [-r "<reason>"]
@@ -26,8 +26,8 @@ bn create "<title>" -t bug|feature|task|epic|chore -p 0-4 [--parent id] [--block
 p0 critical … p4 backlog, default 2. `-d -` reads stdin (heredoc for long text).
 
 ## Other
-`show <id>` · `list [--all]` · `blocked` · `update <id> [--title t] [-d text|-] [-t type] [-p n] [--parent id|none]` · `dep add|rm <id> <blocker-id> [--kind related|discovered-from]` · `defer <id> [--until 4h|2d|YYYY-MM-DD]` · `undefer <id>` · `reopen <id>` · `projects`
+`show <id>` · `list [--all]` · `blocked` · `update <id> [--title t] [-d text|-] [-t type] [-p n] [--parent id|none]` · `dep add|rm <id> <blocker-id> [--kind related|discovered-from]` · `defer <id> [--until 4h|2d|YYYY-MM-DD]` · `undefer <id>` · `reopen <id>`
 
 ## Trouble
-- unreachable: server down or wrong `BOONS_URL`; `bn serve` starts one. Never stop/restart a running server or touch its DB.
-- no project: `bn init <prefix>` (2-3 chars) in repo root → writes `.boons.json`, commit it.
+- unreachable: server down or wrong `BOONS_URL`; tell the user.
+- no project: `bn init <prefix>` (2-3 chars) in repo root (writes `.boons.json`).
