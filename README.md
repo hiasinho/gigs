@@ -120,7 +120,7 @@ bn ready                 # ws-4, then ws-3
 bn serve                          bn init <prefix> [--name <name>]       bn projects
 bn create <title> [-t type] [-p 0-4] [-d desc|-] [--parent id] [--blocked-by id[,id]] [--discovered-from id]
 bn list [--all] [--status s[,s]] [--type t] [--parent id]
-bn ready                          bn blocked                             bn show <id>
+bn ready                          bn blocked                             bn show <id> [--full]
 bn update <id> [--title t] [-d desc|-] [-t type] [-p n] [--parent id|none]
 bn dep add|rm <id> <target-id> [--kind blocks|related|discovered-from]   # default: target blocks id
 bn claim [id]                     bn unclaim <id>                        bn heartbeat <id>
@@ -130,6 +130,7 @@ bn comment <id> <text|->                                                 bn skil
 ```
 
 Types: `bug`, `feature`, `task`, `epic`, `chore`. Priority: `0` (critical) to `4` (backlog), default 2.
+`bn show <id>` is compact; `bn show <id> --full` shows everything, including timestamps and closed relations.
 `bn close --force` closes a parent despite unfinished children (they stay open).
 `bn help` and `bn <command> --help` have the details.
 

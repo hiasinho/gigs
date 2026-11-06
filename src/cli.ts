@@ -168,12 +168,13 @@ const COMMANDS: Record<string, Command> = {
   },
 
   show: {
-    usage: "show <id>",
-    summary: "show a boon in full",
-    async run({ args, json, client }) {
+    usage: "show <id> [--full]",
+    summary: "show a compact boon (--full shows everything)",
+    options: { full: { type: "boolean" } },
+    async run({ args, values, json, client }) {
       const detail = await client().getBoon(arg(args, 0, "id"));
       if (json) return print(detail);
-      console.log(showDetail(detail));
+      console.log(values.full ? showDetail(detail) : showCompactDetail(detail));
     },
   },
 
@@ -475,6 +476,47 @@ function rows(boons: Boon[]): string {
       ].join("  "),
     )
     .join("\n");
+}
+
+function shortTime(value: string): string {
+  const date = new Date(value);
+  const month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][date.getMonth()];
+  const year = date.getFullYear() === new Date().getFullYear() ? "" : ` ${date.getFullYear()}`;
+  return `${month} ${date.getDate()}${year} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function showCompactDetail(detail: BoonDetail): string {
+  const { boon: b, ready, reasons } = detail;
+  let status: string = b.status;
+  if (b.status === "open") status = ready ? "ready" : "open";
+  if (b.status === "in_progress") {
+    status = `in progress, claimed by ${b.claimed_by}${b.claim_expires_at ? ` until ${shortTime(b.claim_expires_at)}` : ""}`;
+  }
+  if (b.status === "deferred") status = `deferred${b.defer_until ? ` until ${shortTime(b.defer_until)}` : ""}`;
+  if (b.status === "closed") status = `closed by ${b.closed_by}${b.close_reason ? `: ${b.close_reason}` : ""}`;
+  const lines = [`${b.id}  ${b.title}`, `${b.type} · P${b.priority} · ${status}`];
+  if (detail.parent) lines.push(`parent: ${detail.parent.id} ${detail.parent.title}`);
+  if (b.status === "open" && !ready) lines.push(`not ready: ${reasonText(reasons)}`);
+  for (const key of ["children", "blockers", "blocks", "related", "discovered_from", "discovered"] as const) {
+    const unfinished = detail[key].filter((boon) => boon.status !== "closed");
+    const closed = detail[key].length - unfinished.length;
+    const label = key.replace("_", " ");
+    if (unfinished.length) {
+      lines.push(`${label}:`, ...unfinished.map((boon) => `  ${boon.id}  ${boon.status}  ${boon.title}`));
+      if (closed) lines.push(`  +${closed} closed`);
+    } else if (closed) {
+      lines.push(`${label}: ${closed} closed`);
+    }
+  }
+  if (b.description) lines.push("", b.description);
+  if (detail.comments.length) {
+    lines.push("", "comments:");
+    for (const c of detail.comments) {
+      const [first, ...rest] = c.body.split("\n");
+      lines.push(`  ${c.author} (${shortTime(c.created_at)}): ${first}`, ...rest.map((line) => `    ${line}`));
+    }
+  }
+  return lines.join("\n");
 }
 
 function showDetail(detail: BoonDetail): string {

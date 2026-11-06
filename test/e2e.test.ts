@@ -105,7 +105,7 @@ test("human output", async () => {
   expect(list.stdout).toBe("bn-1  P1  in_progress  bug      Fix the login  [@agent-1]\nbn-3  P3  in_progress  task     Plain  [@agent-1]\n");
   const show = await bn(["show", "bn-2"]);
   expect(show.stdout).toContain("bn-2  Write docs");
-  expect(show.stdout).toContain("closed:");
+  expect(show.stdout).toContain("task · P2 · closed by agent-1: done");
   expect(show.stdout).toContain("Long\ndescription");
 });
 
@@ -175,7 +175,7 @@ test("update, heartbeat, defer and comments through the real CLI", async () => {
   await json(["comment", task.id, "-"], { stdin: "multi\nline\n", env: { BN_ACTOR: "agent-2" } });
   const shown = await json(["show", task.id]);
   expect(shown.comments.map((c: any) => [c.author, c.body])).toEqual([["agent-1", "halfway there"], ["agent-2", "multi\nline"]]);
-  const human = (await run(["show", task.id])).stdout;
+  const human = (await run(["show", task.id, "--full"])).stdout;
   expect(human).toMatch(/claimed:   by agent-1 at \S+, expires \S+/);
   expect(human).toMatch(/comments:\n  \S+ agent-1:\n    halfway there\n  \S+ agent-2:\n    multi\n    line/);
 
@@ -187,7 +187,7 @@ test("update, heartbeat, defer and comments through the real CLI", async () => {
   expect(until - before).toBeLessThan(2 * 3_600_000 + 60_000);
   expect((await json(["ready"])).map((b: any) => b.id)).toEqual([epic.id]);
   expect((await run(["list"])).stdout).toContain(`[until ${deferred.defer_until}]`);
-  expect((await run(["show", task.id])).stdout).toContain(`deferred:  until ${deferred.defer_until}`);
+  expect((await run(["show", task.id, "--full"])).stdout).toContain(`deferred:  until ${deferred.defer_until}`);
   expect((await run(["defer", task.id, "--until", "2001-01-01T00:00:00Z"])).stderr).toBe("error: until must be in the future\n");
   expect(await json(["defer", task.id, "--until", "2999-01-01T00:00:00Z"])).toMatchObject({ defer_until: "2999-01-01T00:00:00.000Z" });
   const day = await json(["defer", task.id, "--until", "2999-03-04"]);
@@ -203,7 +203,7 @@ test("update, heartbeat, defer and comments through the real CLI", async () => {
   expect((await json(["ready"])).map((b: any) => b.id)).toEqual([task.id, epic.id]);
 });
 
-test("show prints every relation on its own indented line, with numeric ordering", async () => {
+test("show --full prints every relation on its own indented line, with numeric ordering", async () => {
   store.createProject("sh");
   for (let n = 1; n <= 16; n++) store.createBoon("sh", "fixture", { title: `Boon ${n}` });
   store.update("sh-2", "fixture", { parent: "sh-1" });
@@ -219,9 +219,68 @@ test("show prints every relation on its own indented line, with numeric ordering
 
   const json = await bnJson(["show", "sh-2"]);
   expect(json.children.map((b: any) => b.id)).toEqual(["sh-3", "sh-10"]);
-  const human = await bn(["show", "sh-2"]);
+  const human = await bn(["show", "sh-2", "--full"]);
   expect(human.code).toBe(0);
   expect(human.stdout).toContain(`parent:\n  sh-1  open  Boon 1\nchildren:\n  sh-3  closed  Boon 3\n  sh-10  open  Boon 10\nblockers:\n  sh-4  open  Boon 4\n  sh-11  open  Boon 11\nblocks:\n  sh-5  open  Boon 5\n  sh-12  open  Boon 12\nrelated:\n  sh-6  open  Boon 6\n  sh-13  open  Boon 13\ndiscovered_from:\n  sh-7  open  Boon 7\n  sh-14  open  Boon 14\ndiscovered:\n  sh-8  open  Boon 8\n  sh-15  open  Boon 15\n`);
+});
+
+test("compact show covers statuses, relations and multiline comments without audit timestamps", async () => {
+  store.createProject("co");
+  const run = async (id: string, flags: string[] = []) => {
+    const result = await bn(["show", id, ...flags], { env: { TZ: "UTC" } });
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe("");
+    return result.stdout;
+  };
+  const epic = store.createBoon("co", "fixture", { title: "Epic", type: "epic" });
+  const task = store.createBoon("co", "fixture", { title: "Task", priority: 1, description: "First\nsecond", parent: epic.id });
+  const done = store.createBoon("co", "fixture", { title: "Finished child", parent: epic.id });
+  const alsoDone = store.createBoon("co", "fixture", { title: "Another finished child", parent: epic.id });
+  store.close(done.id, "fixture", "verified");
+  store.close(alsoDone.id, "fixture");
+  expect(await run(task.id)).toBe(`${task.id}  Task\ntask · P1 · ready\nparent: ${epic.id} Epic\n\nFirst\nsecond\n`);
+  expect(await run(epic.id)).toBe(`${epic.id}  Epic\nepic · P2 · open\nnot ready: child ${task.id} unfinished\nchildren:\n  ${task.id}  open  Task\n  +2 closed\n`);
+  expect(await run(done.id)).toBe(`${done.id}  Finished child\ntask · P2 · closed by fixture: verified\nparent: ${epic.id} Epic\n`);
+  expect(await run(alsoDone.id)).toContain("task · P2 · closed by fixture\n");
+
+  // JSON remains identical, even with --full. The old complete renderer is exact.
+  const detail = await bnJson(["show", task.id]);
+  expect(await bnJson(["show", task.id, "--full"])).toEqual(detail);
+  const b = detail.boon;
+  expect(await run(task.id, ["--full"])).toBe(
+    `${task.id}  Task\n\nstatus:    open (ready)\ntype:      task\npriority:  P1\ncreated:   ${b.created_at} by fixture\nupdated:   ${b.updated_at}\nparent:\n  ${epic.id}  open  Epic\n\nFirst\nsecond\n`,
+  );
+
+  await bnJson(["claim", task.id]);
+  await bnJson(["comment", task.id, "First line\nSecond line\n\nFourth line"]);
+  const short = "[A-Z][a-z]{2} \\d{1,2}(?: \\d{4})? \\d{2}:\\d{2}";
+  const claimed = await run(task.id);
+  expect(claimed).toMatch(new RegExp(`task · P1 · in progress, claimed by agent-1 until ${short}\\n`));
+  expect(claimed).toMatch(new RegExp(`comments:\\n  agent-1 \\(${short}\\): First line\\n    Second line\\n    \\n    Fourth line\\n$`));
+  expect(claimed).not.toMatch(/created:|updated:|not ready:|\\.\\d{3}Z/);
+
+  await bnJson(["defer", task.id, "--until", "2999-03-04T10:30:00Z"]);
+  const deferred = await run(task.id);
+  expect(deferred).toContain("task · P1 · deferred until Mar 4 2999 10:30\n");
+  expect(deferred).not.toContain("not ready:");
+  await bnJson(["defer", task.id]);
+  expect(await run(task.id)).toContain("task · P1 · deferred\n");
+  await bnJson(["undefer", task.id]);
+
+  // Every relation group uses the same unfinished/closed split; empty groups disappear.
+  const blocker = store.createBoon("co", "fixture", { title: "Blocker" });
+  store.addLink(task.id, blocker.id, "blocks", "fixture");
+  expect(await run(task.id)).toContain(`task · P1 · open\nparent: ${epic.id} Epic\nnot ready: blocked by ${blocker.id}\nblockers:\n  ${blocker.id}  open  Blocker\n`);
+  store.close(blocker.id, "fixture");
+  store.addLink(task.id, done.id, "related", "fixture");
+  store.addLink(task.id, alsoDone.id, "discovered-from", "fixture");
+  store.addLink(done.id, task.id, "discovered-from", "fixture");
+  store.addLink(done.id, task.id, "blocks", "fixture");
+  const relations = await run(task.id);
+  expect(relations).toContain("blockers: 1 closed\nblocks: 1 closed\nrelated: 1 closed\ndiscovered from: 1 closed\ndiscovered: 1 closed\n");
+  await bnJson(["close", task.id]);
+  const closedEpic = await run(epic.id);
+  expect(closedEpic).toBe(`${epic.id}  Epic\nepic · P2 · ready\nchildren: 3 closed\n`);
 });
 
 test("CLI rejects missing global values, unknown global flags and surplus positionals", async () => {
@@ -255,6 +314,7 @@ test("errors, help and connection failures", async () => {
   expect(help.stdout.split("\n").every((line) => line.length <= 80)).toBe(true);
   expect((await bn(["help"])).stdout).toBe(help.stdout);
   expect(help.stdout).toContain("  bn ready\n    ready boons in priority order\n");
+  expect((await bn(["show", "--help"])).stdout).toBe("usage: bn show <id> [--full]\n\nshow a compact boon (--full shows everything)\n");
   const createHelp = await bn(["create", "--help"]);
   expect(createHelp.code).toBe(0);
   expect(createHelp.stdout.split("\n").every((line) => line.length <= 80)).toBe(true);

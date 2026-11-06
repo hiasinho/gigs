@@ -30,6 +30,7 @@ Use `bn claim` without an id to atomically claim the next ready boon. Claim befo
 
 Claims lapse after about 60 minutes without holder activity (server-configurable). Any update, comment, or link change by the holder renews the claim. During long work, run `BN_ACTOR=pi-auth bn heartbeat <id>` before it expires.
 
+`bn show <id>` is compact; add `--full` to show everything, including timestamps and closed relations.
 Use `--json` when parsing output, for example `BN_ACTOR=pi-auth bn ready --json`.
 
 ## File and connect work
