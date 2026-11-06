@@ -125,8 +125,8 @@ bn update <id> [--title t] [-d desc|-] [-t type] [-p n] [--parent id|none]
 bn dep add|rm <id> <target-id> [--kind blocks|related|discovered-from]   # default: target blocks id
 bn claim [id]                     bn unclaim <id>                        bn heartbeat <id>
 bn close <id...> [-r reason] [--force]                                   bn reopen <id>
-bn defer <id> [--until <ISO time|YYYY-MM-DD|30m|4h|2d>]                             bn undefer <id>
-bn comment <id> <text|->
+bn defer <id> [--until <ISO time|YYYY-MM-DD|30m|4h|2d>]                  bn undefer <id>
+bn comment <id> <text|->                                                 bn skill
 ```
 
 Types: `bug`, `feature`, `task`, `epic`, `chore`. Priority: `0` (critical) to `4` (backlog), default 2.
@@ -140,7 +140,8 @@ Types: `bug`, `feature`, `task`, `epic`, `chore`. Priority: `0` (critical) to `4
 - Long tasks: run `bn heartbeat <id>` (or comment) more often than the claim TTL, or the claim
   lapses and someone else may pick the boon up.
 - File work you find but won't do with `--discovered-from <your boon>`.
-- An agent skill lives at [.agents/skills/boons](.agents/skills/boons).
+- An agent skill lives at [.agents/skills/boons](.agents/skills/boons); `bn skill` prints it, so any agent
+  can read it or install it into its own skills directory.
 
 ## Development
 

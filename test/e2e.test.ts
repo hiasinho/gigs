@@ -279,3 +279,12 @@ test("errors, help and connection failures", async () => {
   const down = await bn(["projects"], { env: { BOONS_URL: url } });
   expect(down).toMatchObject({ code: 1, stderr: `error: cannot reach boons server at ${url} (is \`bn serve\` running?)\n` });
 });
+
+test("skill prints the agent skill without a server or project", async () => {
+  const skill = readFileSync(join(import.meta.dir, "../.agents/skills/boons/SKILL.md"), "utf8");
+  const env = { BOONS_URL: "http://127.0.0.1:1" };
+  const r = await bn(["skill"], { cwd: dir, env });
+  expect(r).toEqual({ stdout: skill, stderr: "", code: 0 });
+  expect(await bnJson(["skill"], { cwd: dir, env })).toEqual({ name: "boons", content: skill });
+  expect((await bn(["skill", "extra"], { cwd: dir, env })).code).toBe(1);
+});

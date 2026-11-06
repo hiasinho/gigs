@@ -302,7 +302,18 @@ const COMMANDS: Record<string, Command> = {
     },
   },
 
+  skill: {
+    usage: "skill",
+    summary: "print the agent skill (SKILL.md) that teaches the bn workflow",
+    async run({ json }) {
+      const content = readFileSync(SKILL_PATH, "utf8");
+      if (json) return print({ name: "boons", content });
+      process.stdout.write(content);
+    },
+  },
 };
+
+const SKILL_PATH = join(import.meta.dir, "../.agents/skills/boons/SKILL.md");
 
 function wrapHelp(text: string, indent: string, continuation = indent): string {
   const lines: string[] = [];
@@ -368,7 +379,7 @@ export async function main(argv: string[]) {
   const maxArgs: Record<string, number> = {
     serve: 0, init: 1, projects: 0, list: 0, ready: 0, blocked: 0,
     dep: 3, show: 1, update: 1, claim: 1, unclaim: 1, heartbeat: 1,
-    reopen: 1, defer: 1, undefer: 1,
+    reopen: 1, defer: 1, undefer: 1, skill: 0,
   };
   if (parsed.positionals.length > (maxArgs[name] ?? Infinity)) {
     throw new Error(`too many arguments (see \`bn ${name} --help\`)`);
