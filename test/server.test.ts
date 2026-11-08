@@ -154,7 +154,7 @@ test("spec routes: create, list, show, update, spec filters and claim within a s
   for (const method of ["DELETE", "PUT"]) expect((await call(method, "/specs/sp-s1", { actor: "a", body: "{}" })).status).toBe(404);
   expect((await call("PATCH", "/specs/sp-s1", { body: JSON.stringify({ title: "x" }) })).status).toBe(400);
   const edited = await call("PATCH", "/specs/SP-S1", { actor: "a", body: JSON.stringify({ text: "We agree again." }) });
-  expect(await edited.json()).toEqual({ ...spec, text: "We agree again." });
+  expect(await edited.json()).toEqual({ ...spec, text: "We agree again.", version: 2 });
   await call("PATCH", "/specs/sp-s1", { actor: "a", body: JSON.stringify({ text: "We agree." }) });
   expect((await call("PATCH", "/specs/sp-s1", { actor: "a", body: "{}" })).status).toBe(400);
   expect((await call("PATCH", "/specs/sp-s9", { actor: "a", body: JSON.stringify({ title: "x" }) })).status).toBe(404);
@@ -178,4 +178,35 @@ test("spec routes: create, list, show, update, spec filters and claim within a s
   expect(await (await post("/projects/sp/claim", { spec: "sp-s1" })).json()).toMatchObject({ id: within.id, claimed_by: "a" });
   expect(await (await post("/projects/sp/claim", { spec: "sp-s1" })).json()).toBeNull();
   expect(await (await post("/projects/sp/claim")).json()).toMatchObject({ id: standalone.id });
+});
+
+test("spec edit, history and version routes validate inputs and preserve snapshots", async () => {
+  store.createProject("vh");
+  const spec = store.createSpec("vh", "creator", { title: "Agreement", text: "one two two" });
+  const path = `/specs/${spec.id}`;
+  const edits = [{ old: "one", new: "first" }, { old: "first two two", new: "final" }];
+  expect((await call("POST", `${path}/edits`, { body: JSON.stringify({ edits }) })).status).toBe(400);
+  expect((await call("POST", `${path}/edits`, { actor: "a", token: null, body: JSON.stringify({ edits }) })).status).toBe(401);
+  for (const body of ["{bad", "[]", "{}", '{"edits":[]}', '{"edits":[{"old":"","new":"x"}]}']) {
+    expect((await call("POST", `${path}/edits`, { actor: "a", body })).status).toBe(400);
+  }
+  const conflict = await call("POST", `${path}/edits`, { actor: "a", body: JSON.stringify({ edits: [{ old: "two", new: "x" }] }) });
+  expect(conflict.status).toBe(409);
+  expect(await conflict.json()).toEqual({ error: { code: "edit_conflict", message: "edit 1: old text found 2 times; include more context" } });
+  const edited = await call("POST", `${path}/edits`, { actor: "editor", body: JSON.stringify({ edits }) });
+  expect(edited.status).toBe(200);
+  expect(await edited.json()).toEqual({ ...spec, text: "final", version: 2 });
+  expect(await (await call("GET", `${path}?version=1`)).json()).toEqual(spec);
+  expect(await (await call("GET", `${path}?version=2`)).json()).toEqual({ ...spec, text: "final", version: 2 });
+  const history = await (await call("GET", `${path}/history`)).json();
+  expect(history).toEqual([
+    { version: 1, by: "creator", at: spec.created_at, kind: "create" },
+    { version: 2, by: "editor", at: expect.any(String), kind: "edit", edits },
+  ]);
+  expect((await call("GET", `${path}?version=3`)).status).toBe(404);
+  for (const version of ["", "0", "-1", "1.5", "abc", "Infinity"]) {
+    expect((await call("GET", `${path}?version=${version}`)).status).toBe(400);
+  }
+  expect((await call("GET", "/specs/vh-s99/history")).status).toBe(404);
+  expect((await call("POST", "/specs/vh-s99/edits", { actor: "a", body: JSON.stringify({ edits }) })).status).toBe(404);
 });

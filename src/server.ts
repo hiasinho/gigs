@@ -79,7 +79,11 @@ async function route(store: Store, req: Request, token: string | undefined): Pro
     case "GET /projects/:/specs":
       return store.listSpecs(param);
     case "GET /specs/:":
-      return store.getSpec(param);
+      return store.getSpec(param, url.searchParams.has("version") ? Number(url.searchParams.get("version")) : undefined);
+    case "GET /specs/:/history":
+      return store.specHistory(param);
+    case "POST /specs/:/edits":
+      return store.editSpec(param, actor, (await readBody(req)).edits);
     case "PATCH /specs/:":
       return store.updateSpec(param, actor, await readBody(req));
     case "POST /boons/:/links": {

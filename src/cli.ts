@@ -322,18 +322,23 @@ const COMMANDS: Record<string, Command> = {
   },
 
   spec: {
-    usage: "spec create <title> -d text|- | spec update <id> [--title t] [-d text|-] | spec show <id> [--full] | spec list",
+    usage: "spec create <title> -d text|- | spec update <id> [--title t] [-d text|-] | spec edit <id> --old text --new text | spec edit <id> - | spec history <id> | spec show <id> [--version n] [--full] | spec list",
     summary: "create, edit, show or list specs: agreements boons can point to (`-d -` reads the text from stdin)",
-    options: { description: { type: "string", short: "d" }, title: { type: "string" } },
+    options: {
+      description: { type: "string", short: "d" }, title: { type: "string" },
+      old: { type: "string" }, new: { type: "string" }, version: { type: "string" },
+    },
     async run({ args, values, json, full, print, client, project }) {
-      const action = arg(args, 0, "create|update|show|list");
+      const action = arg(args, 0, "create|update|edit|history|show|list");
+      if (values.version !== undefined && action !== "show") throw new Error("--version only works with spec show");
+      if ((values.old !== undefined || values.new !== undefined) && action !== "edit") throw new Error("--old and --new only work with spec edit");
       if (action === "create") {
         const title = args.slice(1).join(" ");
         if (!title.trim()) throw new Error("missing <title>");
         const text = await readText(values.description as string | undefined);
         if (!text?.trim()) throw new Error("missing text: pass -d <text> or -d - (see `bn spec --help`)");
         const spec = await client().createSpec(project(), title, text);
-        if (json) return print(spec, (s) => ({ id: s.id, title: s.title }));
+        if (json) return print(spec, specRow);
         return console.log(spec.id);
       }
       if (action === "update") {
@@ -344,22 +349,51 @@ const COMMANDS: Record<string, Command> = {
         if (text !== undefined) changes.text = text;
         if (!Object.keys(changes).length) throw new Error("nothing to update: pass --title and/or -d (see `bn spec --help`)");
         const spec = await client().updateSpec(arg(args, 1, "id"), changes);
-        if (json) return print(spec, (s) => ({ id: s.id, title: s.title }));
+        if (json) return print(spec, specRow);
         return console.log(`updated ${spec.id}`);
+      }
+      if (action === "edit") {
+        const id = arg(args, 1, "id");
+        let edits;
+        if (args[2] === "-" && args.length === 3) {
+          if (values.old !== undefined || values.new !== undefined) throw new Error("use stdin or --old/--new, not both");
+          try { edits = JSON.parse(await Bun.stdin.text()); }
+          catch { throw new Error("stdin must be a JSON array of {old,new}"); }
+        } else {
+          if (args.length > 2) throw new Error("too many arguments (see `bn spec --help`)");
+          if (values.old === undefined || values.new === undefined) throw new Error("pass --old and --new, or - for JSON edits on stdin");
+          edits = [{ old: values.old as string, new: values.new as string }];
+        }
+        const spec = await client().editSpec(id, edits);
+        if (json) return print(spec, specRow);
+        return console.log(`edited ${spec.id} (version ${spec.version})`);
+      }
+      if (action === "history") {
+        if (args.length > 2) throw new Error("too many arguments (see `bn spec --help`)");
+        const history = await client().specHistory(arg(args, 1, "id"));
+        if (json) return print(history);
+        return console.log(history.map(({ version, by, at, kind, title, text, edits }) => [
+          `v${version}  ${kind}  ${by}  ${at}`,
+          ...(title === undefined ? [] : [`  title: ${title}`]),
+          ...(text === undefined ? [] : ["  text: replaced"]),
+          ...(edits ?? []).flatMap((edit) => [`  - ${JSON.stringify(edit.old)}`, `  + ${JSON.stringify(edit.new)}`]),
+        ].join("\n")).join("\n"));
       }
       if (action === "show") {
         if (args.length > 2) throw new Error("too many arguments (see `bn spec --help`)");
-        const spec = await client().getSpec(arg(args, 1, "id"));
-        if (json) return print(spec, (s) => ({ id: s.id, title: s.title, text: s.text }));
+        const version = values.version === undefined ? undefined : Number(values.version);
+        if (version !== undefined && (!Number.isSafeInteger(version) || version < 1)) throw new Error("version must be a positive integer");
+        const spec = await client().getSpec(arg(args, 1, "id"), version);
+        if (json) return print(spec, (s) => ({ ...specRow(s), text: s.text }));
         return console.log(showSpec(spec, full));
       }
       if (action === "list") {
         if (args.length > 1) throw new Error("too many arguments (see `bn spec --help`)");
         const specs = await client().listSpecs(project());
-        if (json) return print(specs, (list) => list.map((s) => ({ id: s.id, title: s.title })));
+        if (json) return print(specs, (list) => list.map(specRow));
         return console.log(specs.length ? specs.map((s) => `${s.id}  ${s.title}`).join("\n") : "no specs");
       }
-      throw new Error("expected `bn spec create`, `bn spec update`, `bn spec show` or `bn spec list`");
+      throw new Error("expected `bn spec create|update|edit|history|show|list`");
     },
   },
 
@@ -664,6 +698,10 @@ function showDetail(detail: BoonDetail): string {
     for (const c of detail.comments) lines.push(`  ${c.created_at} ${c.author}:`, ...c.body.split("\n").map((l) => `    ${l}`));
   }
   return lines.join("\n");
+}
+
+function specRow(spec: Spec) {
+  return { id: spec.id, title: spec.title, version: spec.version };
 }
 
 function showSpec(spec: Spec, full: boolean): string {

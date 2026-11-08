@@ -5,9 +5,9 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { BoonsError, Store } from "../src/store";
 
-/** Removes exactly migration 4's additions, leaving a v3 database. */
+/** Removes migrations 5 and 4, leaving a v3 database. */
 const DROP_MIGRATION_4 =
-  "DROP INDEX boons_spec; ALTER TABLE boons DROP COLUMN spec; ALTER TABLE projects DROP COLUMN next_spec_number; DROP TABLE specs;";
+  "DROP TABLE spec_versions; ALTER TABLE specs DROP COLUMN version; DROP INDEX boons_spec; ALTER TABLE boons DROP COLUMN spec; ALTER TABLE projects DROP COLUMN next_spec_number; DROP TABLE specs;";
 
 let dir: string;
 let store: Store;
@@ -250,7 +250,7 @@ describe("migrations", () => {
     expect(again.getBoon("bn-1").title).toBe("x");
     again.dispose();
     const db = new Database(join(dir, "boons.db"));
-    expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 4 });
+    expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 5 });
     db.close();
   });
 });
@@ -263,7 +263,7 @@ describe("specs", () => {
     store.createBoon("bn", "a", { title: "boon" });
     const [a, b, c] = [spec("  First  "), spec("Second"), spec("Other", "xy")];
     expect([a.id, b.id, c.id]).toEqual(["bn-s1", "bn-s2", "xy-s1"]);
-    expect(a).toEqual({ id: "bn-s1", project: "bn", title: "First", text: "We agree.", created_by: "alice", created_at: clock.toISOString() });
+    expect(a).toEqual({ id: "bn-s1", project: "bn", title: "First", text: "We agree.", version: 1, created_by: "alice", created_at: clock.toISOString() });
     expect(store.getSpec(" BN-S2 ")).toEqual(b);
     expect(store.listSpecs("BN").map((s) => s.id)).toEqual(["bn-s1", "bn-s2"]);
     expect(store.createBoon("bn", "a", { title: "next" }).id).toBe("bn-2");
@@ -279,8 +279,8 @@ describe("specs", () => {
     const s = spec();
     const boon = store.createBoon("bn", "a", { title: "x", spec: s.id });
     store.claim(boon.id, "bob");
-    expect(store.updateSpec("BN-S1", "a", { text: "We agree more." })).toEqual({ ...s, text: "We agree more." });
-    expect(store.updateSpec(s.id, "a", { title: "  Renamed  " })).toEqual({ ...s, title: "Renamed", text: "We agree more." });
+    expect(store.updateSpec("BN-S1", "a", { text: "We agree more." })).toEqual({ ...s, text: "We agree more.", version: 2 });
+    expect(store.updateSpec(s.id, "a", { title: "  Renamed  " })).toEqual({ ...s, title: "Renamed", text: "We agree more.", version: 3 });
     store.close(boon.id, "bob");
     expect(store.updateSpec(s.id, "a", { title: "After", text: "Done." })).toMatchObject({ title: "After", text: "Done." });
     for (const changes of [{}, { title: " " }, { text: "" }, { text: 3 }, { project: "xy" }, { title: "t", created_by: "z" }]) {

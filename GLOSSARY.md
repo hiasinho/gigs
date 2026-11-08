@@ -76,6 +76,9 @@ A set of boons connected by blockers. A plan is not a separate thing in Boons; i
 An agreement about a body of work, kept in Boons, that boons can point to. A boon points to at most one spec, of its own project, and pointing to one changes nothing about whether the boon is ready.
 _Avoid_: Document, requirements
 
+**Version**:
+A numbered state of a spec; every change makes a new one.
+
 ### Picking up work
 
 **Ready**:

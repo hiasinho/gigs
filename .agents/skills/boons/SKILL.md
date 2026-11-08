@@ -28,7 +28,10 @@ p0 critical … p4 backlog, default 2. `-d -` reads stdin (heredoc for long text
 ## Specs
 Spec = agreement (title + text), id like `bn-s3`.
 ```
-bn spec show <id>         # {id,title,text}
+bn spec show <id> [--version n] # {id,title,version,text}
+bn spec history <id>
+bn spec edit <id> --old text --new text
+bn spec edit <id> -       # JSON array [{old,new}] on stdin
 bn spec list
 bn spec create "<title>" -d text|-
 bn spec update <id> [--title t] [-d text|-]

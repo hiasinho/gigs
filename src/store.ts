@@ -39,8 +39,20 @@ export interface Spec {
   project: string;
   title: string;
   text: string;
+  version: number;
   created_by: string;
   created_at: string;
+}
+
+export interface SpecEdit { old: string; new: string }
+export interface SpecHistory {
+  version: number;
+  by: string;
+  at: string;
+  kind: "create" | "update" | "edit";
+  title?: string;
+  text?: "replaced";
+  edits?: SpecEdit[];
 }
 
 /** Why an unfinished boon is blocked or has a deferred ancestor. */
@@ -196,13 +208,29 @@ const MIGRATIONS = [
   ALTER TABLE boons ADD COLUMN spec TEXT REFERENCES specs(id);
   CREATE INDEX boons_spec ON boons(spec);
   `,
+  `
+  ALTER TABLE specs ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+  CREATE TABLE spec_versions (
+    spec_id    TEXT NOT NULL REFERENCES specs(id),
+    version    INTEGER NOT NULL,
+    title      TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    kind       TEXT NOT NULL CHECK (kind IN ('create', 'update', 'edit')),
+    change     TEXT,
+    changed_by TEXT NOT NULL,
+    changed_at TEXT NOT NULL,
+    PRIMARY KEY (spec_id, version)
+  );
+  INSERT INTO spec_versions (spec_id, version, title, text, kind, change, changed_by, changed_at)
+    SELECT id, 1, title, text, 'create', NULL, created_by, created_at FROM specs;
+  `,
 ];
 
 const PROJECT_COLUMNS = "prefix, name, created_at";
 const BOON_COLUMNS =
   "id, project, title, description, type, priority, status, claimed_by, claimed_at, claim_expires_at, defer_until, " +
   "created_by, created_at, updated_at, closed_by, closed_at, close_reason, parent, spec";
-const SPEC_COLUMNS = "id, project, title, text, created_by, created_at";
+const SPEC_COLUMNS = "id, project, title, text, version, created_by, created_at";
 const COMMENT_COLUMNS = "id, boon_id, author, body, created_at";
 const CLEAR_CLAIM = "claimed_by = NULL, claimed_at = NULL, claim_expires_at = NULL";
 const READY_ORDER = "ORDER BY priority, created_at, number";
@@ -456,16 +484,18 @@ export class Store {
       const { n } = this.db
         .query("UPDATE projects SET next_spec_number = next_spec_number + 1 WHERE prefix = ? RETURNING next_spec_number - 1 AS n")
         .get(p.prefix) as { n: number };
-      return this.db
+      const spec = this.db
         .query(`INSERT INTO specs (id, project, number, title, text, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING ${SPEC_COLUMNS}`)
         .get(`${p.prefix}-s${n}`, p.prefix, n, title, text, actor, this.timestamp()) as Spec;
+      this.recordSpecVersion(spec, actor, "create", null, spec.created_at);
+      return spec;
     });
   }
 
   /** Changes a spec's title and/or text; absent fields are left alone. */
   updateSpec(id: string, actor: string, changes: NewSpec): Spec {
     return this.op(() => {
-      checkActor(actor);
+      actor = checkActor(actor);
       const spec = this.mustGetSpec(id);
       if (typeof changes !== "object" || changes === null) throw badRequest("changes must be an object");
       const unknown = Object.keys(changes).filter((k) => k !== "title" && k !== "text");
@@ -475,8 +505,16 @@ export class Store {
       if (changes.text !== undefined) sets.text = checkSpecText(changes.text);
       const keys = Object.keys(sets);
       if (!keys.length) throw badRequest("nothing to update; give at least one of title, text");
-      this.db.query(`UPDATE specs SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`).run(...Object.values(sets), spec.id);
-      return this.mustGetSpec(spec.id);
+      const title = sets.title ?? spec.title;
+      const text = sets.text ?? spec.text;
+      if (title === spec.title && text === spec.text) return spec;
+      this.db.query("UPDATE specs SET title = ?, text = ?, version = version + 1 WHERE id = ?").run(title, text, spec.id);
+      const updated = this.mustGetSpec(spec.id);
+      this.recordSpecVersion(updated, actor, "update", {
+        ...(title !== spec.title ? { title } : {}),
+        ...(text !== spec.text ? { text: "replaced" } : {}),
+      });
+      return updated;
     });
   }
 
@@ -486,8 +524,60 @@ export class Store {
     );
   }
 
-  getSpec(id: string): Spec {
-    return this.op(() => this.mustGetSpec(id));
+  getSpec(id: string, version?: unknown): Spec {
+    return this.op(() => {
+      const spec = this.mustGetSpec(id);
+      if (version === undefined) return spec;
+      if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 1) throw badRequest("version must be a positive integer");
+      const snapshot = this.db.query("SELECT title, text, version FROM spec_versions WHERE spec_id = ? AND version = ?").get(spec.id, version) as Pick<Spec, "title" | "text" | "version"> | null;
+      if (!snapshot) throw notFound(`spec ${spec.id} version ${version} not found`);
+      return { ...spec, ...snapshot };
+    });
+  }
+
+  editSpec(id: string, actor: string, edits: unknown): Spec {
+    return this.op(() => {
+      actor = checkActor(actor);
+      const spec = this.mustGetSpec(id);
+      if (!Array.isArray(edits) || !edits.length) throw badRequest("edits must be a non-empty array of {old,new}");
+      let text = spec.text;
+      for (const [i, edit] of edits.entries()) {
+        if (typeof edit !== "object" || edit === null || Array.isArray(edit) ||
+          typeof edit.old !== "string" || !edit.old.length || typeof edit.new !== "string" ||
+          Object.keys(edit).some((key) => key !== "old" && key !== "new")) {
+          throw badRequest(`edit ${i + 1}: expected {old,new} strings with non-empty old`);
+        }
+        let count = 0;
+        let at = text.indexOf(edit.old);
+        const first = at;
+        while (at !== -1) {
+          count++;
+          at = text.indexOf(edit.old, at + 1);
+        }
+        if (!count) throw conflict(`edit ${i + 1}: old text not found`, "edit_conflict");
+        if (count > 1) throw conflict(`edit ${i + 1}: old text found ${count} times; include more context`, "edit_conflict");
+        text = text.slice(0, first) + edit.new + text.slice(first + edit.old.length);
+      }
+      checkSpecText(text);
+      if (text === spec.text) return spec;
+      this.db.query("UPDATE specs SET text = ?, version = version + 1 WHERE id = ?").run(text, spec.id);
+      const updated = this.mustGetSpec(spec.id);
+      this.recordSpecVersion(updated, actor, "edit", { edits });
+      return updated;
+    });
+  }
+
+  specHistory(id: string): SpecHistory[] {
+    return this.op(() => {
+      const spec = this.mustGetSpec(id);
+      const rows = this.db.query("SELECT version, changed_by AS by, changed_at AS at, kind, change FROM spec_versions WHERE spec_id = ? ORDER BY version").all(spec.id) as (SpecHistory & { change: string | null })[];
+      return rows.map(({ change, ...row }) => ({ ...row, ...(change === null ? {} : JSON.parse(change)) }));
+    });
+  }
+
+  private recordSpecVersion(spec: Spec, actor: string, kind: SpecHistory["kind"], change: Record<string, unknown> | null, at = this.timestamp()) {
+    this.db.query("INSERT INTO spec_versions (spec_id, version, title, text, kind, change, changed_by, changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(spec.id, spec.version, spec.title, spec.text, kind, change === null ? null : JSON.stringify(change), actor, at);
   }
 
   // --- claims ---

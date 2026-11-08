@@ -109,11 +109,22 @@ and `claim` limits them to boons pointing to that spec, with readiness unchanged
 the spec still blocks). With `--spec`, the project comes from the spec id, so no `.boons.json` is
 needed.
 
+Each spec starts at version 1. Every change saves a new numbered state and a compact history
+entry; a no-op saves nothing. Boons still point to the spec, not a particular version.
+Use `bn spec edit` for exact text replacements: each `old` must be non-empty and occur exactly
+once at that step. Edits run in order, all-or-nothing; `new` may be empty, but the final text may
+not be empty. Full title/text replacement via `bn spec update` remains available.
+`bn spec history <id>` shows the changes; `bn spec show <id> --version n` reads an older state.
+
 ```sh
 bn spec create "Checkout v2" -d - < docs/checkout.md   # ws-s1
 bn create "Payment API" --spec ws-s1
 bn ready --spec ws-s1
 bn claim --spec ws-s1
+bn spec edit ws-s1 --old "Payment API" --new "Payments API"
+printf '%s' '[{"old":"Checkout","new":"Checkout v2"}]' | bn spec edit ws-s1 -
+bn spec history ws-s1
+bn spec show ws-s1 --version 1
 ```
 
 ## Workflow
@@ -143,8 +154,10 @@ bn claim [id] [--spec id]         bn unclaim <id>                        bn hear
 bn close <id...> [-r reason] [--force]                                   bn reopen <id>
 bn defer <id> [--until <ISO time|YYYY-MM-DD|30m|4h|2d>]                  bn undefer <id>
 bn comment <id> <text|->                                                 bn skill
-bn spec create <title> -d text|-  bn spec show <id> [--full]             bn spec list
+bn spec create <title> -d text|-  bn spec show <id> [--version n] [--full]  bn spec list
 bn spec update <id> [--title t] [-d text|-]
+bn spec edit <id> --old text --new text   bn spec edit <id> -   # JSON array [{old,new}] on stdin
+bn spec history <id>
 ```
 
 Types: `bug`, `feature`, `task`, `epic`, `chore`. Priority: `0` (critical) to `4` (backlog), default 2.
@@ -165,7 +178,11 @@ or `bn show <id> --human --full` for the complete text view.
     claim/close fields, `parent` and relations as `{id, title, status}` (unfinished only), `closed`
     counts per relation, and `comments: [{author, at, body}]`. `claim` prints `null` if nothing is ready.
   - `comment` prints `{boon_id, author, at, body}`.
-  - `spec create` and `spec list` print `{id, title}`; `spec show` prints `{id, title, text}`.
+  - `spec create`, `spec update`, `spec edit` and `spec list` print `{id, title, version}`;
+    `spec show` prints `{id, title, version, text}`.
+  - `spec history` prints ascending `{version, by, at, kind, title?, text?, edits?}` entries:
+    changed titles are included, full text updates use `text: "replaced"`, and edits include
+    the `{old,new}` replacements.
 - Add `--full` to get the raw API response instead (all fields, nested `{boon, ...}` for `show`).
 - Give every agent a unique actor name and pass `BN_ACTOR=claude-docs bn …` on every call,
   since claims are per actor and shells do not persist exports between calls.

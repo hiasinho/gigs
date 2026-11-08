@@ -450,21 +450,21 @@ test("specs through the real CLI: create, show, list, --spec filters, project fr
   const env = { BN_PROJECT: "sq" };
   const json = (args: string[], opts: Parameters<typeof bn>[1] = { env }) => bnJson(args, opts);
 
-  expect(await json(["spec", "create", "Checkout", "v2", "-d", "-"], { env, stdin: "We agree on\nthe flow.\n" })).toEqual({ id: "sq-s1", title: "Checkout v2" });
-  expect(await json(["spec", "create", "Second", "-d", "short"])).toEqual({ id: "sq-s2", title: "Second" });
+  expect(await json(["spec", "create", "Checkout", "v2", "-d", "-"], { env, stdin: "We agree on\nthe flow.\n" })).toEqual({ id: "sq-s1", title: "Checkout v2", version: 1 });
+  expect(await json(["spec", "create", "Second", "-d", "short"])).toEqual({ id: "sq-s2", title: "Second", version: 1 });
   expect((await bn(["spec", "create", "No text"], { env })).stderr).toContain("missing text");
-  expect(await json(["spec", "show", "SQ-S1"], { cwd })).toEqual({ id: "sq-s1", title: "Checkout v2", text: "We agree on\nthe flow." });
+  expect(await json(["spec", "show", "SQ-S1"], { cwd })).toEqual({ id: "sq-s1", title: "Checkout v2", version: 1, text: "We agree on\nthe flow." });
   expect(await json(["spec", "show", "sq-s1", "--full"], { cwd })).toMatchObject({ id: "sq-s1", project: "sq", created_by: "agent-1" });
   expect((await bn(["spec", "show", "sq-s1", "--human"], { cwd })).stdout).toBe("sq-s1  Checkout v2\n\nWe agree on\nthe flow.\n");
-  expect(await json(["spec", "list"])).toEqual([{ id: "sq-s1", title: "Checkout v2" }, { id: "sq-s2", title: "Second" }]);
+  expect(await json(["spec", "list"])).toEqual([{ id: "sq-s1", title: "Checkout v2", version: 1 }, { id: "sq-s2", title: "Second", version: 1 }]);
   expect((await bn(["spec", "list", "--human"], { env })).stdout).toBe("sq-s1  Checkout v2\nsq-s2  Second\n");
   expect((await bn(["spec", "show", "sq-s9"], { cwd })).code).toBe(1);
   expect((await bn(["spec", "edit", "sq-s1"], { env })).code).toBe(1);
-  expect(await json(["spec", "update", "sq-s2", "--title", "Second v2", "-d", "-"], { env, stdin: "Longer\ntext\n" })).toEqual({ id: "sq-s2", title: "Second v2" });
-  expect(await json(["spec", "show", "sq-s2"], { env })).toEqual({ id: "sq-s2", title: "Second v2", text: "Longer\ntext" });
+  expect(await json(["spec", "update", "sq-s2", "--title", "Second v2", "-d", "-"], { env, stdin: "Longer\ntext\n" })).toEqual({ id: "sq-s2", title: "Second v2", version: 2 });
+  expect(await json(["spec", "show", "sq-s2"], { env })).toEqual({ id: "sq-s2", title: "Second v2", version: 2, text: "Longer\ntext" });
   expect((await bn(["spec", "update", "sq-s2", "--human", "-d", "short"], { env })).stdout).toBe("updated sq-s2\n");
   expect((await bn(["spec", "update", "sq-s2"], { env })).stderr).toContain("nothing to update");
-  expect(await json(["spec", "update", "sq-s2", "--title", "Second"], { env })).toEqual({ id: "sq-s2", title: "Second" });
+  expect(await json(["spec", "update", "sq-s2", "--title", "Second"], { env })).toEqual({ id: "sq-s2", title: "Second", version: 4 });
 
   // Without .boons.json, the project comes from the spec id; it wins over a different -P.
   const blocker = await json(["create", "Outside", "-p", "0"]);
@@ -488,4 +488,45 @@ test("specs through the real CLI: create, show, list, --spec filters, project fr
   expect(await json(["claim", "--spec", "sq-s1"], { cwd })).toMatchObject({ id: b.id, status: "in_progress", spec: "sq-s1" });
   expect(await json(["claim", "--spec", "sq-s1"], { cwd })).toBeNull();
   expect(await json(["claim"])).toMatchObject({ id: blocker.id });
+});
+
+test("spec edit and history through CLI: flags, stdin, snapshots, raw and human output", async () => {
+  store.createProject("ve");
+  const opts = { env: { BN_PROJECT: "ve" } };
+  const first = await bnJson(["spec", "create", "Agreement", "-d", "one two"], opts);
+  expect(first).toEqual({ id: "ve-s1", title: "Agreement", version: 1 });
+  expect(await bnJson(["spec", "edit", first.id, "--old", "one", "--new", "first"], opts)).toEqual({ ...first, version: 2 });
+  const edits = [{ old: "first", new: "last" }, { old: "last two", new: "done" }];
+  expect(await bnJson(["spec", "edit", first.id, "-"], { ...opts, stdin: JSON.stringify(edits) })).toEqual({ ...first, version: 3 });
+  expect(await bnJson(["spec", "show", first.id, "--version", "1"], opts)).toEqual({ ...first, text: "one two" });
+  expect(await bnJson(["spec", "show", first.id, "--version", "2", "--full"], opts)).toMatchObject({ version: 2, text: "first two", project: "ve", created_by: "agent-1" });
+  expect((await bn(["spec", "show", first.id, "--version", "1", "--human"], opts)).stdout).toContain("one two");
+  const history = await bnJson(["spec", "history", first.id], opts);
+  expect(history).toEqual([
+    { version: 1, by: "agent-1", at: expect.any(String), kind: "create" },
+    { version: 2, by: "agent-1", at: expect.any(String), kind: "edit", edits: [{ old: "one", new: "first" }] },
+    { version: 3, by: "agent-1", at: expect.any(String), kind: "edit", edits },
+  ]);
+  expect(await bnJson(["spec", "history", first.id, "--full"], opts)).toEqual(history);
+  const human = (await bn(["spec", "history", first.id, "--human"], opts)).stdout;
+  expect(human).toContain("v3  edit  agent-1");
+  expect(human).toContain('  - "last two"\n  + "done"');
+  expect(await bnJson(["spec", "edit", first.id, "--old", "done", "--new", "done"], opts)).toEqual({ ...first, version: 3 });
+  expect((await bn(["spec", "edit", first.id, "--old", "missing", "--new", "x"], opts)).stderr).toContain("edit 1: old text not found");
+  expect((await bn(["spec", "edit", first.id, "--old", "done", "--new", ""], opts)).stderr).toContain("text is required");
+  expect(await bnJson(["spec", "edit", first.id, "--old", "done", "--new", "done!", "--full"], opts)).toMatchObject({ version: 4, text: "done!", project: "ve" });
+  expect((await bn(["spec", "edit", first.id, "--old", "!", "--new", "", "--human"], opts)).stdout).toBe("edited ve-s1 (version 5)\n");
+  for (const stdin of ["invalid", "{}", "[]", '[{"old":"done"}]']) {
+    expect((await bn(["spec", "edit", first.id, "-"], { ...opts, stdin })).code).toBe(1);
+  }
+  for (const args of [
+    ["edit", first.id, "--old", "done"], ["edit", first.id, "--new", "x"],
+    ["edit", first.id, "-", "--old", "done", "--new", "x"],
+    ["edit", first.id, "extra"], ["history", first.id, "extra"],
+    ["show", first.id, "--version", "0"], ["show", first.id, "--version", "abc"],
+    ["show", first.id, "--version", "99"], ["history", "ve-s99"],
+    ["edit", first.id, "--version", "1"],
+  ]) expect((await bn(["spec", ...args], opts)).code).toBe(1);
+  expect(await bnJson(["spec", "list"], opts)).toEqual([{ ...first, version: 5 }]);
+  expect(await bnJson(["spec", "history", first.id], opts)).toHaveLength(5);
 });
