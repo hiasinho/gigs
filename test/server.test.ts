@@ -139,7 +139,7 @@ test("slice 3 routes: update, heartbeat, defer, undefer, comments", async () => 
   expect(((await (await call("GET", `/boons/${id}`)).json()) as any).comments).toHaveLength(1);
 });
 
-test("spec routes: create, list, show, spec filters and claim within a spec; specs cannot change", async () => {
+test("spec routes: create, list, show, update, spec filters and claim within a spec", async () => {
   store.createProject("sp");
   store.createProject("so");
   const post = (path: string, body?: unknown) => call("POST", path, { actor: "a", body: body === undefined ? undefined : JSON.stringify(body) });
@@ -151,7 +151,13 @@ test("spec routes: create, list, show, spec filters and claim within a spec; spe
   expect(await (await call("GET", "/projects/sp/specs")).json()).toEqual([spec]);
   expect(await (await call("GET", "/specs/SP-S1")).json()).toEqual(spec);
   expect((await call("GET", "/specs/sp-s9")).status).toBe(404);
-  for (const method of ["PATCH", "DELETE", "PUT"]) expect((await call(method, "/specs/sp-s1", { actor: "a", body: "{}" })).status).toBe(404);
+  for (const method of ["DELETE", "PUT"]) expect((await call(method, "/specs/sp-s1", { actor: "a", body: "{}" })).status).toBe(404);
+  expect((await call("PATCH", "/specs/sp-s1", { body: JSON.stringify({ title: "x" }) })).status).toBe(400);
+  const edited = await call("PATCH", "/specs/SP-S1", { actor: "a", body: JSON.stringify({ text: "We agree again." }) });
+  expect(await edited.json()).toEqual({ ...spec, text: "We agree again." });
+  await call("PATCH", "/specs/sp-s1", { actor: "a", body: JSON.stringify({ text: "We agree." }) });
+  expect((await call("PATCH", "/specs/sp-s1", { actor: "a", body: "{}" })).status).toBe(400);
+  expect((await call("PATCH", "/specs/sp-s9", { actor: "a", body: JSON.stringify({ title: "x" }) })).status).toBe(404);
 
   const within = (await (await post("/projects/sp/boons", { title: "within", spec: "sp-s1" })).json()) as any;
   expect(within.spec).toBe("sp-s1");

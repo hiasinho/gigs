@@ -460,6 +460,11 @@ test("specs through the real CLI: create, show, list, --spec filters, project fr
   expect((await bn(["spec", "list", "--human"], { env })).stdout).toBe("sq-s1  Checkout v2\nsq-s2  Second\n");
   expect((await bn(["spec", "show", "sq-s9"], { cwd })).code).toBe(1);
   expect((await bn(["spec", "edit", "sq-s1"], { env })).code).toBe(1);
+  expect(await json(["spec", "update", "sq-s2", "--title", "Second v2", "-d", "-"], { env, stdin: "Longer\ntext\n" })).toEqual({ id: "sq-s2", title: "Second v2" });
+  expect(await json(["spec", "show", "sq-s2"], { env })).toEqual({ id: "sq-s2", title: "Second v2", text: "Longer\ntext" });
+  expect((await bn(["spec", "update", "sq-s2", "--human", "-d", "short"], { env })).stdout).toBe("updated sq-s2\n");
+  expect((await bn(["spec", "update", "sq-s2"], { env })).stderr).toContain("nothing to update");
+  expect(await json(["spec", "update", "sq-s2", "--title", "Second"], { env })).toEqual({ id: "sq-s2", title: "Second" });
 
   // Without .boons.json, the project comes from the spec id; it wins over a different -P.
   const blocker = await json(["create", "Outside", "-p", "0"]);

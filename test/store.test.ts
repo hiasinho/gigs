@@ -271,15 +271,24 @@ describe("specs", () => {
     expectError(() => store.listSpecs("zz"), "not_found", 404);
   });
 
-  test("title and text are required, and specs never change", () => {
+  test("title and text are required; specs can be edited any time", () => {
     for (const input of [{ text: "x" }, { title: " ", text: "x" }, { title: "t" }, { title: "t", text: "  " }, { title: "t", text: 3 }]) {
       expectError(() => store.createSpec("bn", "a", input), "bad_request", 400);
     }
     expectError(() => store.createSpec("bn", " ", { title: "t", text: "x" }), "bad_request", 400);
-    const fixed = spec();
-    const boon = store.createBoon("bn", "a", { title: "x", spec: fixed.id });
-    store.update(boon.id, "a", { title: "renamed", spec: null });
-    expect(store.getSpec(fixed.id)).toEqual(fixed);
+    const s = spec();
+    const boon = store.createBoon("bn", "a", { title: "x", spec: s.id });
+    store.claim(boon.id, "bob");
+    expect(store.updateSpec("BN-S1", "a", { text: "We agree more." })).toEqual({ ...s, text: "We agree more." });
+    expect(store.updateSpec(s.id, "a", { title: "  Renamed  " })).toEqual({ ...s, title: "Renamed", text: "We agree more." });
+    store.close(boon.id, "bob");
+    expect(store.updateSpec(s.id, "a", { title: "After", text: "Done." })).toMatchObject({ title: "After", text: "Done." });
+    for (const changes of [{}, { title: " " }, { text: "" }, { text: 3 }, { project: "xy" }, { title: "t", created_by: "z" }]) {
+      expectError(() => store.updateSpec(s.id, "a", changes as any), "bad_request", 400);
+    }
+    expectError(() => store.updateSpec(s.id, " ", { title: "t" }), "bad_request", 400);
+    expectError(() => store.updateSpec("bn-s9", "a", { title: "t" }), "not_found", 404);
+    expect(store.getBoon(boon.id).spec).toBe(s.id);
   });
 
   test("boons point to a spec of their own project; set on create, change or clear on update, no inheritance", () => {

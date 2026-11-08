@@ -102,12 +102,12 @@ See [GLOSSARY.md](GLOSSARY.md) for the exact vocabulary.
 
 ## Specs
 
-A spec is a fixed agreement (title and text) stored in Boons; IDs are `<prefix>-s<n>`. Specs are
-optional and never change: a changed agreement is a new spec, and boons are relinked with
-`bn update <id> --spec <new>`. A boon may point to one spec of its own project; children don't
-inherit it. `--spec <id>` on `list`, `ready`, `blocked` and `claim` limits them to boons pointing to
-that spec, with readiness unchanged (a blocker outside the spec still blocks). With `--spec`, the
-project comes from the spec id, so no `.boons.json` is needed.
+A spec is an agreement (title and text) stored in Boons; IDs are `<prefix>-s<n>`. Specs are optional
+and can be edited any time with `bn spec update <id> [--title t] [-d text|-]`. A boon may point to
+one spec of its own project; children don't inherit it. `--spec <id>` on `list`, `ready`, `blocked`
+and `claim` limits them to boons pointing to that spec, with readiness unchanged (a blocker outside
+the spec still blocks). With `--spec`, the project comes from the spec id, so no `.boons.json` is
+needed.
 
 ```sh
 bn spec create "Checkout v2" -d - < docs/checkout.md   # ws-s1
@@ -144,6 +144,7 @@ bn close <id...> [-r reason] [--force]                                   bn reop
 bn defer <id> [--until <ISO time|YYYY-MM-DD|30m|4h|2d>]                  bn undefer <id>
 bn comment <id> <text|->                                                 bn skill
 bn spec create <title> -d text|-  bn spec show <id> [--full]             bn spec list
+bn spec update <id> [--title t] [-d text|-]
 ```
 
 Types: `bug`, `feature`, `task`, `epic`, `chore`. Priority: `0` (critical) to `4` (backlog), default 2.

@@ -80,6 +80,8 @@ async function route(store: Store, req: Request, token: string | undefined): Pro
       return store.listSpecs(param);
     case "GET /specs/:":
       return store.getSpec(param);
+    case "PATCH /specs/:":
+      return store.updateSpec(param, actor, await readBody(req));
     case "POST /boons/:/links": {
       const body = await readBody(req);
       return store.addLink(param, body.target, body.kind, actor);

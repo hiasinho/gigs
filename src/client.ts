@@ -88,6 +88,10 @@ export class Client {
     return this.request<Spec>("GET", `/specs/${enc(id)}`);
   }
 
+  updateSpec(id: string, changes: { title?: string; text?: string }) {
+    return this.request<Spec>("PATCH", `/specs/${enc(id)}`, changes);
+  }
+
   addLink(id: string, target: string, kind: string) {
     return this.request<BoonDetail>("POST", `/boons/${enc(id)}/links`, { target, kind });
   }

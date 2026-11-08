@@ -33,7 +33,7 @@ export interface Boon {
   close_reason: string | null;
 }
 
-/** A fixed agreement boons can point to; never changes after creation. */
+/** An agreement about a body of work that boons can point to. */
 export interface Spec {
   id: string;
   project: string;
@@ -452,13 +452,31 @@ export class Store {
       actor = checkActor(actor);
       const p = this.mustGetProject(project);
       const title = checkTitle(input.title);
-      if (typeof input.text !== "string" || !input.text.trim()) throw badRequest("text is required");
+      const text = checkSpecText(input.text);
       const { n } = this.db
         .query("UPDATE projects SET next_spec_number = next_spec_number + 1 WHERE prefix = ? RETURNING next_spec_number - 1 AS n")
         .get(p.prefix) as { n: number };
       return this.db
         .query(`INSERT INTO specs (id, project, number, title, text, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING ${SPEC_COLUMNS}`)
-        .get(`${p.prefix}-s${n}`, p.prefix, n, title, input.text, actor, this.timestamp()) as Spec;
+        .get(`${p.prefix}-s${n}`, p.prefix, n, title, text, actor, this.timestamp()) as Spec;
+    });
+  }
+
+  /** Changes a spec's title and/or text; absent fields are left alone. */
+  updateSpec(id: string, actor: string, changes: NewSpec): Spec {
+    return this.op(() => {
+      checkActor(actor);
+      const spec = this.mustGetSpec(id);
+      if (typeof changes !== "object" || changes === null) throw badRequest("changes must be an object");
+      const unknown = Object.keys(changes).filter((k) => k !== "title" && k !== "text");
+      if (unknown.length) throw badRequest(`cannot update ${unknown.join(", ")}; updatable fields: title, text`);
+      const sets: Record<string, string> = {};
+      if (changes.title !== undefined) sets.title = checkTitle(changes.title);
+      if (changes.text !== undefined) sets.text = checkSpecText(changes.text);
+      const keys = Object.keys(sets);
+      if (!keys.length) throw badRequest("nothing to update; give at least one of title, text");
+      this.db.query(`UPDATE specs SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`).run(...Object.values(sets), spec.id);
+      return this.mustGetSpec(spec.id);
     });
   }
 
@@ -815,6 +833,11 @@ function summary({ id, title, status, type, priority }: Boon): BoonSummary {
 function checkLinkKind(kind: unknown): LinkKind {
   if (!LINK_KINDS.includes(kind as LinkKind)) throw badRequest(`kind must be one of ${LINK_KINDS.join(", ")}`);
   return kind as LinkKind;
+}
+
+function checkSpecText(text: unknown): string {
+  if (typeof text !== "string" || !text.trim()) throw badRequest("text is required");
+  return text;
 }
 
 function checkActor(actor: string): string {

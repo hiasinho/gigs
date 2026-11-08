@@ -322,11 +322,11 @@ const COMMANDS: Record<string, Command> = {
   },
 
   spec: {
-    usage: "spec create <title> -d text|- | spec show <id> [--full] | spec list",
-    summary: "create, show or list specs: fixed agreements boons can point to (`-d -` reads the text from stdin)",
-    options: { description: { type: "string", short: "d" } },
+    usage: "spec create <title> -d text|- | spec update <id> [--title t] [-d text|-] | spec show <id> [--full] | spec list",
+    summary: "create, edit, show or list specs: agreements boons can point to (`-d -` reads the text from stdin)",
+    options: { description: { type: "string", short: "d" }, title: { type: "string" } },
     async run({ args, values, json, full, print, client, project }) {
-      const action = arg(args, 0, "create|show|list");
+      const action = arg(args, 0, "create|update|show|list");
       if (action === "create") {
         const title = args.slice(1).join(" ");
         if (!title.trim()) throw new Error("missing <title>");
@@ -335,6 +335,17 @@ const COMMANDS: Record<string, Command> = {
         const spec = await client().createSpec(project(), title, text);
         if (json) return print(spec, (s) => ({ id: s.id, title: s.title }));
         return console.log(spec.id);
+      }
+      if (action === "update") {
+        if (args.length > 2) throw new Error("too many arguments (see `bn spec --help`)");
+        const changes: { title?: string; text?: string } = {};
+        if (values.title !== undefined) changes.title = values.title as string;
+        const text = await readText(values.description as string | undefined);
+        if (text !== undefined) changes.text = text;
+        if (!Object.keys(changes).length) throw new Error("nothing to update: pass --title and/or -d (see `bn spec --help`)");
+        const spec = await client().updateSpec(arg(args, 1, "id"), changes);
+        if (json) return print(spec, (s) => ({ id: s.id, title: s.title }));
+        return console.log(`updated ${spec.id}`);
       }
       if (action === "show") {
         if (args.length > 2) throw new Error("too many arguments (see `bn spec --help`)");
@@ -348,7 +359,7 @@ const COMMANDS: Record<string, Command> = {
         if (json) return print(specs, (list) => list.map((s) => ({ id: s.id, title: s.title })));
         return console.log(specs.length ? specs.map((s) => `${s.id}  ${s.title}`).join("\n") : "no specs");
       }
-      throw new Error("expected `bn spec create`, `bn spec show` or `bn spec list`");
+      throw new Error("expected `bn spec create`, `bn spec update`, `bn spec show` or `bn spec list`");
     },
   },
 
