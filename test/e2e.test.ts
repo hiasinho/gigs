@@ -404,7 +404,7 @@ test("errors, help and connection failures", async () => {
   expect(help.stdout).toContain("bn defer <id> [--until");
   expect(help.stdout.split("\n").every((line) => line.length <= 80)).toBe(true);
   expect((await bn(["help"])).stdout).toBe(help.stdout);
-  expect(help.stdout).toContain("  bn ready\n    ready boons in priority order\n");
+  expect(help.stdout).toContain("  bn ready [--spec id]\n    ready boons in priority order\n");
   expect((await bn(["show", "--help"])).stdout).toBe("usage: bn show <id> [--full]\n\nshow a compact boon (--full shows everything)\n");
   const createHelp = await bn(["create", "--help"]);
   expect(createHelp.code).toBe(0);
@@ -440,4 +440,47 @@ test("skill prints the agent skill without a server or project", async () => {
     expect(await bn(["skill", flag], { cwd: dir, env })).toEqual(r);
   }
   expect((await bn(["skill", "extra"], { cwd: dir, env })).code).toBe(1);
+});
+
+test("specs through the real CLI: create, show, list, --spec filters, project from the spec id", async () => {
+  const cwd = join(dir, "spec-project");
+  mkdirSync(cwd);
+  store.createProject("sq");
+  store.createProject("sz");
+  const env = { BN_PROJECT: "sq" };
+  const json = (args: string[], opts: Parameters<typeof bn>[1] = { env }) => bnJson(args, opts);
+
+  expect(await json(["spec", "create", "Checkout", "v2", "-d", "-"], { env, stdin: "We agree on\nthe flow.\n" })).toEqual({ id: "sq-s1", title: "Checkout v2" });
+  expect(await json(["spec", "create", "Second", "-d", "short"])).toEqual({ id: "sq-s2", title: "Second" });
+  expect((await bn(["spec", "create", "No text"], { env })).stderr).toContain("missing text");
+  expect(await json(["spec", "show", "SQ-S1"], { cwd })).toEqual({ id: "sq-s1", title: "Checkout v2", text: "We agree on\nthe flow." });
+  expect(await json(["spec", "show", "sq-s1", "--full"], { cwd })).toMatchObject({ id: "sq-s1", project: "sq", created_by: "agent-1" });
+  expect((await bn(["spec", "show", "sq-s1", "--human"], { cwd })).stdout).toBe("sq-s1  Checkout v2\n\nWe agree on\nthe flow.\n");
+  expect(await json(["spec", "list"])).toEqual([{ id: "sq-s1", title: "Checkout v2" }, { id: "sq-s2", title: "Second" }]);
+  expect((await bn(["spec", "list", "--human"], { env })).stdout).toBe("sq-s1  Checkout v2\nsq-s2  Second\n");
+  expect((await bn(["spec", "show", "sq-s9"], { cwd })).code).toBe(1);
+  expect((await bn(["spec", "edit", "sq-s1"], { env })).code).toBe(1);
+
+  // Without .boons.json, the project comes from the spec id; it wins over a different -P.
+  const blocker = await json(["create", "Outside", "-p", "0"]);
+  const a = await json(["create", "Within", "--spec", "SQ-S1", "--blocked-by", blocker.id], { cwd });
+  expect(a).toEqual({ id: "sq-2", title: "Within", type: "task", priority: 2, status: "open", spec: "sq-s1" });
+  const b = await json(["create", "Also within", "-p", "3", "--spec", "sq-s1", "-P", "sz"], { cwd });
+  expect(b.id).toBe("sq-3");
+  const moved = await json(["create", "Moved"]);
+  expect(await json(["update", moved.id, "--spec", "sq-s2"], { cwd })).toMatchObject({ spec: "sq-s2" });
+  expect(await json(["update", moved.id, "--spec", "none"], { cwd })).not.toHaveProperty("spec");
+
+  expect((await json(["list", "--spec", "sq-s1"], { cwd })).map((x: any) => x.id)).toEqual([a.id, b.id]);
+  expect((await json(["ready", "--spec", "sq-s1", "-P", "sz"], { cwd })).map((x: any) => x.id)).toEqual([b.id]);
+  expect(await json(["blocked", "--spec", "sq-s1"], { cwd })).toEqual([{ ...a, reasons: [{ kind: "blocker", id: blocker.id }] }]);
+  expect(await json(["show", a.id], { cwd })).toMatchObject({ id: a.id, spec: "sq-s1" });
+  expect((await bn(["show", a.id, "--human"], { cwd })).stdout).toContain("\nspec: sq-s1\n");
+
+  const wrong = await bn(["create", "x", "--spec", "nope"], { cwd });
+  expect(wrong.stderr).toBe("error: invalid spec id: nope\n");
+  expect((await bn(["claim", b.id, "--spec", "sq-s1"], { cwd })).stderr).toContain("--spec only works");
+  expect(await json(["claim", "--spec", "sq-s1"], { cwd })).toMatchObject({ id: b.id, status: "in_progress", spec: "sq-s1" });
+  expect(await json(["claim", "--spec", "sq-s1"], { cwd })).toBeNull();
+  expect(await json(["claim"])).toMatchObject({ id: blocker.id });
 });

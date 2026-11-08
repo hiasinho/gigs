@@ -80,7 +80,7 @@ test("create, list with filters, detail, claim conflict", async () => {
 
 test("auth and actor requirements cover all mutation routes, including errors", async () => {
   const routes: [string, string][] = [
-    ["POST", "/projects"], ["POST", "/projects/bn/boons"], ["POST", "/projects/bn/claim"],
+    ["POST", "/projects"], ["POST", "/projects/bn/boons"], ["POST", "/projects/bn/claim"], ["POST", "/projects/bn/specs"],
     ["PATCH", "/boons/bn-1"], ["POST", "/boons/bn-1/links"],
     ["DELETE", "/boons/bn-1/links/related/bn-2"], ["POST", "/missing"],
     ...["claim", "unclaim", "close", "reopen", "heartbeat", "defer", "undefer", "comments"]
@@ -137,4 +137,39 @@ test("slice 3 routes: update, heartbeat, defer, undefer, comments", async () => 
   expect(await (await post(`/boons/${id}/defer`, { until: "2999-01-01T00:00:00Z" })).json()).toMatchObject({ status: "deferred", claimed_by: null, defer_until: "2999-01-01T00:00:00.000Z" });
   expect(await (await post(`/boons/${id}/undefer`)).json()).toMatchObject({ status: "open", defer_until: null });
   expect(((await (await call("GET", `/boons/${id}`)).json()) as any).comments).toHaveLength(1);
+});
+
+test("spec routes: create, list, show, spec filters and claim within a spec; specs cannot change", async () => {
+  store.createProject("sp");
+  store.createProject("so");
+  const post = (path: string, body?: unknown) => call("POST", path, { actor: "a", body: body === undefined ? undefined : JSON.stringify(body) });
+  const created = await post("/projects/sp/specs", { title: "Agreement", text: "We agree." });
+  expect(created.status).toBe(201);
+  const spec = (await created.json()) as any;
+  expect(spec).toMatchObject({ id: "sp-s1", project: "sp", title: "Agreement", text: "We agree.", created_by: "a" });
+  expect((await post("/projects/sp/specs", { title: "No text" })).status).toBe(400);
+  expect(await (await call("GET", "/projects/sp/specs")).json()).toEqual([spec]);
+  expect(await (await call("GET", "/specs/SP-S1")).json()).toEqual(spec);
+  expect((await call("GET", "/specs/sp-s9")).status).toBe(404);
+  for (const method of ["PATCH", "DELETE", "PUT"]) expect((await call(method, "/specs/sp-s1", { actor: "a", body: "{}" })).status).toBe(404);
+
+  const within = (await (await post("/projects/sp/boons", { title: "within", spec: "sp-s1" })).json()) as any;
+  expect(within.spec).toBe("sp-s1");
+  const standalone = (await (await post("/projects/sp/boons", { title: "standalone", priority: 0 })).json()) as any;
+  expect(standalone.spec).toBeNull();
+  const other = (await (await post("/projects/so/specs", { title: "Other", text: "x" })).json()) as any;
+  expect((await post("/projects/sp/boons", { title: "x", spec: other.id })).status).toBe(400);
+  expect((await post("/projects/sp/boons", { title: "x", spec: "sp-s9" })).status).toBe(404);
+  const cleared = await call("PATCH", `/boons/${within.id}`, { actor: "a", body: JSON.stringify({ spec: null }) });
+  expect(((await cleared.json()) as any).spec).toBeNull();
+  await call("PATCH", `/boons/${within.id}`, { actor: "a", body: JSON.stringify({ spec: "sp-s1" }) });
+
+  const ids = async (path: string) => ((await (await call("GET", path)).json()) as any[]).map((b) => b.id ?? b.boon.id);
+  expect(await ids("/projects/sp/boons?spec=sp-s1")).toEqual([within.id]);
+  expect(await ids("/projects/sp/ready?spec=sp-s1")).toEqual([within.id]);
+  expect(await ids("/projects/sp/blocked?spec=sp-s1")).toEqual([]);
+  expect((await call("GET", `/projects/sp/ready?spec=${other.id}`)).status).toBe(400);
+  expect(await (await post("/projects/sp/claim", { spec: "sp-s1" })).json()).toMatchObject({ id: within.id, claimed_by: "a" });
+  expect(await (await post("/projects/sp/claim", { spec: "sp-s1" })).json()).toBeNull();
+  expect(await (await post("/projects/sp/claim")).json()).toMatchObject({ id: standalone.id });
 });

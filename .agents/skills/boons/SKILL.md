@@ -25,6 +25,15 @@ bn create "<title>" -t bug|feature|task|epic|chore -p 0-4 [--parent id] [--block
 ```
 p0 critical … p4 backlog, default 2. `-d -` reads stdin (heredoc for long text).
 
+## Specs
+Spec = fixed agreement, id like `bn-s3`; never changes (changed agreement = new spec).
+```
+bn spec show <id>         # {id,title,text}
+bn spec list
+bn spec create "<title>" -d text|-
+```
+`--spec <id>` on `create`, `update` (`none` clears), `list`, `ready`, `blocked`, `claim` (no id): only boons of that spec; project comes from the spec id.
+
 ## Other
 `show <id>` · `list [--all]` · `blocked` · `update <id> [--title t] [-d text|-] [-t type] [-p n] [--parent id|none]` · `dep add|rm <id> <blocker-id> [--kind related|discovered-from]` · `defer <id> [--until 4h|2d|YYYY-MM-DD]` · `undefer <id>` · `reopen <id>`
 

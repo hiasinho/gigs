@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { Client, type BoonChangesInput } from "./client";
 import { configFromEnv, serve } from "./server";
-import { BoonsError, formatReasons as reasonText, type Boon, type BoonDetail, type BoonSummary, type LinkKind, type Project } from "./store";
+import { BoonsError, formatReasons as reasonText, type Boon, type BoonDetail, type BoonSummary, type LinkKind, type Project, type Spec } from "./store";
 
 type Options = NonNullable<ParseArgsConfig["options"]>;
 type Values = Record<string, string | boolean | undefined>;
@@ -85,8 +85,8 @@ const COMMANDS: Record<string, Command> = {
   },
 
   create: {
-    usage: "create <title> [-t type] [-p 0-4] [-d desc|-] [--parent id] [--blocked-by id[,id]] [--discovered-from id]",
-    summary: "create a boon (`-d -` reads the description from stdin)",
+    usage: "create <title> [-t type] [-p 0-4] [-d desc|-] [--parent id] [--blocked-by id[,id]] [--discovered-from id] [--spec id]",
+    summary: "create a boon (`-d -` reads the description from stdin; with --spec, in the spec's project)",
     options: {
       type: { type: "string", short: "t" },
       priority: { type: "string", short: "p" },
@@ -94,6 +94,7 @@ const COMMANDS: Record<string, Command> = {
       parent: { type: "string" },
       "blocked-by": { type: "string" },
       "discovered-from": { type: "string" },
+      spec: { type: "string" },
     },
     async run({ args, values, json, print, client, project }) {
       const title = args.join(" ");
@@ -107,6 +108,7 @@ const COMMANDS: Record<string, Command> = {
         parent: values.parent as string | undefined,
         blocked_by: (values["blocked-by"] as string | undefined)?.split(","),
         discovered_from: values["discovered-from"] as string | undefined,
+        spec: values.spec as string | undefined,
       });
       if (json) return print(boon, row);
       console.log(boon.id);
@@ -114,13 +116,14 @@ const COMMANDS: Record<string, Command> = {
   },
 
   list: {
-    usage: "list [--all] [--status s[,s]] [--type t] [--parent id]",
+    usage: "list [--all] [--status s[,s]] [--type t] [--parent id] [--spec id]",
     summary: "list boons (default: unfinished)",
     options: {
       all: { type: "boolean" },
       status: { type: "string" },
       type: { type: "string" },
       parent: { type: "string" },
+      spec: { type: "string" },
     },
     async run({ values, json, print, client, project }) {
       const boons = await client().listBoons(project(), {
@@ -128,6 +131,7 @@ const COMMANDS: Record<string, Command> = {
         status: values.status as string | undefined,
         parent: values.parent as string | undefined,
         type: values.type as string | undefined,
+        spec: values.spec as string | undefined,
       });
       if (json) return print(boons, (list) => list.map(row));
       console.log(boons.length ? rows(boons) : "no boons");
@@ -135,20 +139,22 @@ const COMMANDS: Record<string, Command> = {
   },
 
   ready: {
-    usage: "ready",
+    usage: "ready [--spec id]",
     summary: "ready boons in priority order",
-    async run({ json, print, client, project }) {
-      const boons = await client().ready(project());
+    options: { spec: { type: "string" } },
+    async run({ values, json, print, client, project }) {
+      const boons = await client().ready(project(), values.spec as string | undefined);
       if (json) return print(boons, (list) => list.map(row));
       console.log(boons.length ? rows(boons) : "no ready boons");
     },
   },
 
   blocked: {
-    usage: "blocked",
+    usage: "blocked [--spec id]",
     summary: "blocked boons with reasons",
-    async run({ json, print, client, project }) {
-      const blocked = await client().blocked(project());
+    options: { spec: { type: "string" } },
+    async run({ values, json, print, client, project }) {
+      const blocked = await client().blocked(project(), values.spec as string | undefined);
       if (json) return print(blocked, (list) => list.map(({ boon, reasons }) => ({ ...row(boon), reasons })));
       console.log(blocked.length ? blocked.map(({ boon, reasons }) => `${rows([boon])}\n  ${reasonText(reasons)}`).join("\n") : "no blocked boons");
     },
@@ -183,14 +189,15 @@ const COMMANDS: Record<string, Command> = {
   },
 
   update: {
-    usage: "update <id> [--title t] [-d desc|-] [-t type] [-p n] [--parent id|none]",
-    summary: "change a boon's fields (`--parent none` clears the parent)",
+    usage: "update <id> [--title t] [-d desc|-] [-t type] [-p n] [--parent id|none] [--spec id|none]",
+    summary: "change a boon's fields (`none` clears the parent or spec)",
     options: {
       title: { type: "string" },
       description: { type: "string", short: "d" },
       type: { type: "string", short: "t" },
       priority: { type: "string", short: "p" },
       parent: { type: "string" },
+      spec: { type: "string" },
     },
     async run({ args, values, json, print, client }) {
       const id = arg(args, 0, "id");
@@ -200,6 +207,7 @@ const COMMANDS: Record<string, Command> = {
         type: values.type as string | undefined,
         priority: values.priority === undefined ? undefined : parsePriority(values.priority as string),
         parent: values.parent === "none" ? null : (values.parent as string | undefined),
+        spec: values.spec === "none" ? null : (values.spec as string | undefined),
       };
       if (Object.values(changes).every((v) => v === undefined)) throw new Error("nothing to update (see `bn update --help`)");
       const boon = await client().update(id, changes);
@@ -209,11 +217,13 @@ const COMMANDS: Record<string, Command> = {
   },
 
   claim: {
-    usage: "claim [id]",
-    summary: "claim the given boon, or the next ready one",
-    async run({ args, json, full, print, client, project }) {
+    usage: "claim [id] [--spec id]",
+    summary: "claim the given boon, or the next ready one (--spec: next ready within that spec; not with an id)",
+    options: { spec: { type: "string" } },
+    async run({ args, values, json, full, print, client, project }) {
+      if (args[0] && values.spec !== undefined) throw new Error("--spec only works with `bn claim` without an id");
       const c = client();
-      const boon = args[0] ? await c.claim(args[0]) : await c.claimNext(project());
+      const boon = args[0] ? await c.claim(args[0]) : await c.claimNext(project(), values.spec as string | undefined);
       if (json) return print(boon && !full ? compactShow(await c.getBoon(boon.id)) : boon);
       console.log(boon ? `claimed ${boon.id}: ${boon.title}` : "no ready boons");
     },
@@ -311,6 +321,37 @@ const COMMANDS: Record<string, Command> = {
     },
   },
 
+  spec: {
+    usage: "spec create <title> -d text|- | spec show <id> [--full] | spec list",
+    summary: "create, show or list specs: fixed agreements boons can point to (`-d -` reads the text from stdin)",
+    options: { description: { type: "string", short: "d" } },
+    async run({ args, values, json, full, print, client, project }) {
+      const action = arg(args, 0, "create|show|list");
+      if (action === "create") {
+        const title = args.slice(1).join(" ");
+        if (!title.trim()) throw new Error("missing <title>");
+        const text = await readText(values.description as string | undefined);
+        if (!text?.trim()) throw new Error("missing text: pass -d <text> or -d - (see `bn spec --help`)");
+        const spec = await client().createSpec(project(), title, text);
+        if (json) return print(spec, (s) => ({ id: s.id, title: s.title }));
+        return console.log(spec.id);
+      }
+      if (action === "show") {
+        if (args.length > 2) throw new Error("too many arguments (see `bn spec --help`)");
+        const spec = await client().getSpec(arg(args, 1, "id"));
+        if (json) return print(spec, (s) => ({ id: s.id, title: s.title, text: s.text }));
+        return console.log(showSpec(spec, full));
+      }
+      if (action === "list") {
+        if (args.length > 1) throw new Error("too many arguments (see `bn spec --help`)");
+        const specs = await client().listSpecs(project());
+        if (json) return print(specs, (list) => list.map((s) => ({ id: s.id, title: s.title })));
+        return console.log(specs.length ? specs.map((s) => `${s.id}  ${s.title}`).join("\n") : "no specs");
+      }
+      throw new Error("expected `bn spec create`, `bn spec show` or `bn spec list`");
+    },
+  },
+
   skill: {
     usage: "skill",
     summary: "print the agent skill (SKILL.md) that teaches the bn workflow",
@@ -354,6 +395,8 @@ global options:
   --as <actor>       act as <actor> (default: $BN_ACTOR, then $USER)
   -P, --project <p>  project prefix
                      (default: $BN_PROJECT, then nearest .boons.json)
+  --spec <id>        (create, list, ready, blocked, claim) the project comes
+                     from the spec id, overriding -P, $BN_PROJECT, .boons.json
 
 env: BOONS_URL (default http://127.0.0.1:7357), BOONS_TOKEN`;
 }
@@ -408,7 +451,7 @@ export async function main(argv: string[]) {
         token: process.env.BOONS_TOKEN || undefined,
         actor: (values.as as string | undefined) || process.env.BN_ACTOR || process.env.USER || "unknown",
       }),
-    project: () => resolveProject(values.project as string | undefined),
+    project: () => specProject(values.spec) ?? resolveProject(values.project as string | undefined),
   });
 }
 
@@ -435,6 +478,14 @@ function resolveProject(flag: string | undefined): string {
     if (dirname(dir) === dir) break;
   }
   throw new Error("no project: pass -P <prefix>, set BN_PROJECT, or run `bn init <prefix>` in your repo");
+}
+
+/** The project of a spec id like `bn-s3`, or undefined without a spec. */
+function specProject(spec: unknown): string | undefined {
+  if (typeof spec !== "string") return undefined;
+  const m = /^([a-z][a-z0-9]{1,2})-s\d+$/i.exec(spec.trim());
+  if (!m) throw new Error(`invalid spec id: ${spec}`);
+  return m[1]!.toLowerCase();
 }
 
 function arg(args: string[], i: number, name: string): string {
@@ -484,7 +535,7 @@ function compact(obj: Record<string, unknown>): Record<string, unknown> {
 function row(b: Boon) {
   const claimed = b.status === "in_progress";
   return compact({
-    id: b.id, title: b.title, type: b.type, priority: b.priority, status: b.status, parent: b.parent,
+    id: b.id, title: b.title, type: b.type, priority: b.priority, status: b.status, parent: b.parent, spec: b.spec,
     claimed_by: claimed ? b.claimed_by : null, claim_expires_at: claimed ? b.claim_expires_at : null,
     defer_until: b.defer_until, close_reason: b.status === "closed" ? b.close_reason : null,
   });
@@ -504,7 +555,7 @@ function compactShow(detail: BoonDetail) {
     if (n) closed[key] = n;
   }
   return compact({
-    id: b.id, title: b.title, type: b.type, priority: b.priority, status: b.status, description: b.description,
+    id: b.id, title: b.title, type: b.type, priority: b.priority, status: b.status, spec: b.spec, description: b.description,
     ready: open ? ready : null, reasons: open && !ready ? reasons : null,
     claimed_by: claimed ? b.claimed_by : null, claim_expires_at: claimed ? b.claim_expires_at : null,
     defer_until: b.defer_until,
@@ -548,6 +599,7 @@ function showCompactDetail(detail: BoonDetail): string {
   if (b.status === "deferred") status = `deferred${b.defer_until ? ` until ${shortTime(b.defer_until)}` : ""}`;
   if (b.status === "closed") status = `closed by ${b.closed_by}${b.close_reason ? `: ${b.close_reason}` : ""}`;
   const lines = [`${b.id}  ${b.title}`, `${b.type} · P${b.priority} · ${status}`];
+  if (b.spec) lines.push(`spec: ${b.spec}`);
   if (detail.parent) lines.push(`parent: ${detail.parent.id} ${detail.parent.title}`);
   if (b.status === "open" && !ready) lines.push(`not ready: ${reasonText(reasons)}`);
   for (const key of RELATIONS) {
@@ -581,6 +633,7 @@ function showDetail(detail: BoonDetail): string {
   if (b.status === "deferred") field("deferred", b.defer_until ? `until ${b.defer_until}` : "until undeferred");
   field("type", b.type);
   field("priority", `P${b.priority}`);
+  if (b.spec) field("spec", b.spec);
   field("created", `${b.created_at} by ${b.created_by}`);
   field("updated", b.updated_at);
   if (b.closed_at) field("closed", `${b.closed_at} by ${b.closed_by}${b.close_reason ? `: ${b.close_reason}` : ""}`);
@@ -600,6 +653,12 @@ function showDetail(detail: BoonDetail): string {
     for (const c of detail.comments) lines.push(`  ${c.created_at} ${c.author}:`, ...c.body.split("\n").map((l) => `    ${l}`));
   }
   return lines.join("\n");
+}
+
+function showSpec(spec: Spec, full: boolean): string {
+  const lines = [`${spec.id}  ${spec.title}`];
+  if (full) lines.push(`created ${spec.created_at} by ${spec.created_by}`);
+  return [...lines, "", spec.text].join("\n");
 }
 
 function errorMessage(err: unknown): string {

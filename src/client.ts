@@ -1,4 +1,4 @@
-import { BoonsError, type Boon, type BoonDetail, type Comment, type Project, type Reason } from "./store";
+import { BoonsError, type Boon, type BoonDetail, type Comment, type Project, type Reason, type Spec } from "./store";
 
 export interface ClientOptions {
   url: string;
@@ -14,6 +14,7 @@ export interface NewBoonInput {
   parent?: string;
   blocked_by?: string[];
   discovered_from?: string;
+  spec?: string;
 }
 
 export interface BoonChangesInput {
@@ -22,6 +23,7 @@ export interface BoonChangesInput {
   type?: string;
   priority?: number | string;
   parent?: string | null;
+  spec?: string | null;
 }
 
 export interface ListQuery {
@@ -29,6 +31,7 @@ export interface ListQuery {
   type?: string;
   all?: boolean;
   parent?: string;
+  spec?: string;
 }
 
 export class Client {
@@ -55,6 +58,7 @@ export class Client {
     if (query.status) q.set("status", query.status);
     if (query.type) q.set("type", query.type);
     if (query.parent) q.set("parent", query.parent);
+    if (query.spec) q.set("spec", query.spec);
     if (query.all) q.set("all", "1");
     const qs = q.size ? `?${q}` : "";
     return this.request<Boon[]>("GET", `/projects/${enc(project)}/boons${qs}`);
@@ -64,12 +68,24 @@ export class Client {
     return this.request<Boon>("POST", `/projects/${enc(project)}/boons`, input);
   }
 
-  ready(project: string) {
-    return this.request<Boon[]>("GET", `/projects/${enc(project)}/ready`);
+  ready(project: string, spec?: string) {
+    return this.request<Boon[]>("GET", `/projects/${enc(project)}/ready${specQuery(spec)}`);
   }
 
-  blocked(project: string) {
-    return this.request<{ boon: Boon; reasons: Reason[] }[]>("GET", `/projects/${enc(project)}/blocked`);
+  blocked(project: string, spec?: string) {
+    return this.request<{ boon: Boon; reasons: Reason[] }[]>("GET", `/projects/${enc(project)}/blocked${specQuery(spec)}`);
+  }
+
+  createSpec(project: string, title: string, text: string) {
+    return this.request<Spec>("POST", `/projects/${enc(project)}/specs`, { title, text });
+  }
+
+  listSpecs(project: string) {
+    return this.request<Spec[]>("GET", `/projects/${enc(project)}/specs`);
+  }
+
+  getSpec(id: string) {
+    return this.request<Spec>("GET", `/specs/${enc(id)}`);
   }
 
   addLink(id: string, target: string, kind: string) {
@@ -80,8 +96,8 @@ export class Client {
     return this.request<BoonDetail>("DELETE", `/boons/${enc(id)}/links/${enc(kind)}/${enc(target)}`);
   }
 
-  claimNext(project: string) {
-    return this.request<Boon | null>("POST", `/projects/${enc(project)}/claim`);
+  claimNext(project: string, spec?: string) {
+    return this.request<Boon | null>("POST", `/projects/${enc(project)}/claim`, spec === undefined ? undefined : { spec });
   }
 
   getBoon(id: string) {
@@ -152,3 +168,4 @@ export class Client {
 }
 
 const enc = encodeURIComponent;
+const specQuery = (spec?: string) => (spec === undefined ? "" : `?spec=${enc(spec)}`);

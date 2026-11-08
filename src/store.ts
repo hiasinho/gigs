@@ -20,6 +20,7 @@ export interface Boon {
   priority: number;
   status: Status;
   parent: string | null;
+  spec: string | null;
   claimed_by: string | null;
   claimed_at: string | null;
   claim_expires_at: string | null;
@@ -30,6 +31,16 @@ export interface Boon {
   closed_by: string | null;
   closed_at: string | null;
   close_reason: string | null;
+}
+
+/** A fixed agreement boons can point to; never changes after creation. */
+export interface Spec {
+  id: string;
+  project: string;
+  title: string;
+  text: string;
+  created_by: string;
+  created_at: string;
 }
 
 /** Why an unfinished boon is blocked or has a deferred ancestor. */
@@ -75,6 +86,12 @@ export interface NewBoon {
   parent?: unknown;
   blocked_by?: unknown;
   discovered_from?: unknown;
+  spec?: unknown;
+}
+
+export interface NewSpec {
+  title?: unknown;
+  text?: unknown;
 }
 
 /** Fields `update` may change; absent fields are left alone. */
@@ -84,14 +101,16 @@ export interface BoonChanges {
   type?: unknown;
   priority?: unknown;
   parent?: unknown;
+  spec?: unknown;
 }
-const CHANGEABLE = ["title", "description", "type", "priority", "parent"];
+const CHANGEABLE = ["title", "description", "type", "priority", "parent", "spec"];
 
 export interface ListFilter {
   status?: string[];
   type?: string;
   all?: boolean;
   parent?: string;
+  spec?: string;
 }
 
 export class BoonsError extends Error {
@@ -162,12 +181,28 @@ const MIGRATIONS = [
   );
   CREATE INDEX comments_boon ON comments(boon_id);
   `,
+  `
+  CREATE TABLE specs (
+    id         TEXT PRIMARY KEY,
+    project    TEXT NOT NULL REFERENCES projects(prefix),
+    number     INTEGER NOT NULL,
+    title      TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (project, number)
+  );
+  ALTER TABLE projects ADD COLUMN next_spec_number INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE boons ADD COLUMN spec TEXT REFERENCES specs(id);
+  CREATE INDEX boons_spec ON boons(spec);
+  `,
 ];
 
 const PROJECT_COLUMNS = "prefix, name, created_at";
 const BOON_COLUMNS =
   "id, project, title, description, type, priority, status, claimed_by, claimed_at, claim_expires_at, defer_until, " +
-  "created_by, created_at, updated_at, closed_by, closed_at, close_reason, parent";
+  "created_by, created_at, updated_at, closed_by, closed_at, close_reason, parent, spec";
+const SPEC_COLUMNS = "id, project, title, text, created_by, created_at";
 const COMMENT_COLUMNS = "id, boon_id, author, body, created_at";
 const CLEAR_CLAIM = "claimed_by = NULL, claimed_at = NULL, claim_expires_at = NULL";
 const READY_ORDER = "ORDER BY priority, created_at, number";
@@ -247,6 +282,7 @@ export class Store {
       }
       const blockers = ((input.blocked_by ?? []) as unknown[]).map((id) => this.reference(id));
       const discovered = input.discovered_from == null ? null : this.reference(input.discovered_from);
+      const spec = input.spec == null ? null : this.specReference(input.spec, p.prefix);
 
       const { next_number: n } = this.db
         .query("UPDATE projects SET next_number = next_number + 1 WHERE prefix = ? RETURNING next_number - 1 AS next_number")
@@ -259,7 +295,7 @@ export class Store {
            VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)`,
         )
         .run(id, p.prefix, n, title, description, type, priority, actor, now, now);
-      this.db.query("UPDATE boons SET parent = ? WHERE id = ?").run(parent, id);
+      this.db.query("UPDATE boons SET parent = ?, spec = ? WHERE id = ?").run(parent, spec, id);
       for (const target of blockers) this.insertLink(id, target, "blocks");
       if (discovered) this.insertLink(id, discovered, "discovered-from");
       this.checkCycles();
@@ -308,6 +344,7 @@ export class Store {
       if (changes.type !== undefined) sets.type = checkType(changes.type);
       if (changes.priority !== undefined) sets.priority = checkPriority(changes.priority);
       if (changes.parent !== undefined) sets.parent = changes.parent === null ? null : this.reference(changes.parent);
+      if (changes.spec !== undefined) sets.spec = changes.spec === null ? null : this.specReference(changes.spec, boon.project);
       const keys = Object.keys(sets);
       if (!keys.length) throw badRequest(`nothing to update; give at least one of ${CHANGEABLE.join(", ")}`);
       this.db.query(`UPDATE boons SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`).run(...Object.values(sets), boon.id);
@@ -354,22 +391,26 @@ export class Store {
         where.push("type = ?");
         params.push(filter.type);
       }
+      if (filter.spec !== undefined) {
+        where.push("spec = ?");
+        params.push(this.specReference(filter.spec, p.prefix));
+      }
       return this.db
         .query(`SELECT ${BOON_COLUMNS} FROM boons WHERE ${where.join(" AND ")} ORDER BY priority, number`)
         .all(...params) as Boon[];
     });
   }
 
-  /** Ready boons of a project, in the order they should be picked up. */
-  ready(project: string): Boon[] {
-    return this.op(() => this.readyBoons(this.mustGetProject(project).prefix));
+  /** Ready boons of a project (only those pointing to `spec`, if given), in the order they should be picked up. */
+  ready(project: string, spec?: unknown): Boon[] {
+    return this.op(() => this.readyBoons(this.mustGetProject(project).prefix, spec));
   }
 
-  blocked(project: string): { boon: Boon; reasons: Reason[] }[] {
+  blocked(project: string, spec?: unknown): { boon: Boon; reasons: Reason[] }[] {
     return this.op(() => {
       const prefix = this.mustGetProject(project).prefix;
       const graph = this.graph();
-      return this.orderedBoons(prefix).filter((b) => b.status !== "closed" && b.status !== "deferred")
+      return this.orderedBoons(prefix, spec).filter((b) => b.status !== "closed" && b.status !== "deferred")
         .map((boon) => ({ boon, reasons: this.readiness(boon, graph).reasons }))
         .filter((entry) => entry.reasons.some((r) => r.kind !== "deferred_ancestor"));
     });
@@ -404,6 +445,33 @@ export class Store {
     });
   }
 
+  // --- specs ---
+
+  createSpec(project: string, actor: string, input: NewSpec): Spec {
+    return this.op(() => {
+      actor = checkActor(actor);
+      const p = this.mustGetProject(project);
+      const title = checkTitle(input.title);
+      if (typeof input.text !== "string" || !input.text.trim()) throw badRequest("text is required");
+      const { n } = this.db
+        .query("UPDATE projects SET next_spec_number = next_spec_number + 1 WHERE prefix = ? RETURNING next_spec_number - 1 AS n")
+        .get(p.prefix) as { n: number };
+      return this.db
+        .query(`INSERT INTO specs (id, project, number, title, text, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING ${SPEC_COLUMNS}`)
+        .get(`${p.prefix}-s${n}`, p.prefix, n, title, input.text, actor, this.timestamp()) as Spec;
+    });
+  }
+
+  listSpecs(project: string): Spec[] {
+    return this.op(() =>
+      this.db.query(`SELECT ${SPEC_COLUMNS} FROM specs WHERE project = ? ORDER BY number`).all(this.mustGetProject(project).prefix) as Spec[],
+    );
+  }
+
+  getSpec(id: string): Spec {
+    return this.op(() => this.mustGetSpec(id));
+  }
+
   // --- claims ---
 
   claim(id: string, actor: string): Boon {
@@ -421,11 +489,11 @@ export class Store {
     });
   }
 
-  /** Claims the first ready boon of the project, or returns null if there is none. */
-  claimNext(project: string, actor: string): Boon | null {
+  /** Claims the first ready boon of the project (within `spec`, if given), or returns null if there is none. */
+  claimNext(project: string, actor: string, spec?: unknown): Boon | null {
     return this.op(() => {
       actor = checkActor(actor);
-      const [next] = this.readyBoons(this.mustGetProject(project).prefix);
+      const [next] = this.readyBoons(this.mustGetProject(project).prefix, spec);
       return next ? this.claimBoon(next.id, actor) : null;
     });
   }
@@ -604,6 +672,20 @@ export class Store {
     return this.mustGet(id).id;
   }
 
+  private mustGetSpec(id: string): Spec {
+    const spec = this.db.query(`SELECT ${SPEC_COLUMNS} FROM specs WHERE id = ?`).get(id.trim().toLowerCase()) as Spec | null;
+    if (!spec) throw notFound(`spec ${id} not found`);
+    return spec;
+  }
+
+  /** A boon may only point to a spec of its own project. */
+  private specReference(id: unknown, project: string): string {
+    if (typeof id !== "string" || !id.trim()) throw badRequest("spec must be a non-empty string");
+    const spec = this.mustGetSpec(id);
+    if (spec.project !== project) throw badRequest(`spec ${spec.id} belongs to project ${spec.project}, not ${project}`);
+    return spec.id;
+  }
+
   private insertLink(id: string, target: string, kind: LinkKind) {
     if (id === target) throw badRequest("a boon cannot link to itself");
     if (kind === "related" && this.db.query("SELECT 1 FROM links WHERE boon_id = ? AND target_id = ? AND kind = 'related'").get(target, id)) return;
@@ -673,13 +755,17 @@ export class Store {
     return { ready: boon.status === "open" && reasons.length === 0, reasons };
   }
 
-  private orderedBoons(prefix: string): Boon[] {
-    return this.db.query(`SELECT ${BOON_COLUMNS} FROM boons WHERE project = ? ${READY_ORDER}`).all(prefix) as Boon[];
+  /** Boons of the project in pickup order; with `spec`, only those pointing to it. */
+  private orderedBoons(prefix: string, spec?: unknown): Boon[] {
+    if (spec === undefined) return this.db.query(`SELECT ${BOON_COLUMNS} FROM boons WHERE project = ? ${READY_ORDER}`).all(prefix) as Boon[];
+    const specId = this.specReference(spec, prefix);
+    return this.db.query(`SELECT ${BOON_COLUMNS} FROM boons WHERE project = ? AND spec = ? ${READY_ORDER}`).all(prefix, specId) as Boon[];
   }
 
-  private readyBoons(prefix: string): Boon[] {
+  /** Readiness is always derived from the whole graph, so a blocker outside the spec still blocks. */
+  private readyBoons(prefix: string, spec?: unknown): Boon[] {
     const graph = this.graph();
-    return this.orderedBoons(prefix).filter((boon) => this.readiness(boon, graph).ready);
+    return this.orderedBoons(prefix, spec).filter((boon) => this.readiness(boon, graph).ready);
   }
 
   private claimBoon(id: string, actor: string): Boon {

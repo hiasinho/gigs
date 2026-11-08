@@ -5,6 +5,10 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { BoonsError, Store } from "../src/store";
 
+/** Removes exactly migration 4's additions, leaving a v3 database. */
+const DROP_MIGRATION_4 =
+  "DROP INDEX boons_spec; ALTER TABLE boons DROP COLUMN spec; ALTER TABLE projects DROP COLUMN next_spec_number; DROP TABLE specs;";
+
 let dir: string;
 let store: Store;
 let clock: Date;
@@ -228,6 +232,7 @@ describe("migrations", () => {
     store.claim(first.id, "holder");
     // Reconstruct the exact v1 schema by removing only migration 2's additions.
     const db = new Database(join(dir, "boons.db"));
+    db.run(DROP_MIGRATION_4);
     db.run("DROP TABLE comments; ALTER TABLE boons DROP COLUMN claim_expires_at; ALTER TABLE boons DROP COLUMN defer_until;");
     db.run("DROP TABLE links; DROP INDEX boons_parent; ALTER TABLE boons DROP COLUMN parent; PRAGMA user_version = 1;");
     db.close();
@@ -245,7 +250,93 @@ describe("migrations", () => {
     expect(again.getBoon("bn-1").title).toBe("x");
     again.dispose();
     const db = new Database(join(dir, "boons.db"));
-    expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 3 });
+    expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 4 });
     db.close();
+  });
+});
+
+describe("specs", () => {
+  const spec = (title = "Agreement", project = "bn") => store.createSpec(project, "alice", { title, text: "We agree." });
+
+  test("numbered per project with their own counter, case-insensitive ids, listed by number", () => {
+    store.createProject("xy");
+    store.createBoon("bn", "a", { title: "boon" });
+    const [a, b, c] = [spec("  First  "), spec("Second"), spec("Other", "xy")];
+    expect([a.id, b.id, c.id]).toEqual(["bn-s1", "bn-s2", "xy-s1"]);
+    expect(a).toEqual({ id: "bn-s1", project: "bn", title: "First", text: "We agree.", created_by: "alice", created_at: clock.toISOString() });
+    expect(store.getSpec(" BN-S2 ")).toEqual(b);
+    expect(store.listSpecs("BN").map((s) => s.id)).toEqual(["bn-s1", "bn-s2"]);
+    expect(store.createBoon("bn", "a", { title: "next" }).id).toBe("bn-2");
+    expectError(() => store.getSpec("bn-s9"), "not_found", 404);
+    expectError(() => store.listSpecs("zz"), "not_found", 404);
+  });
+
+  test("title and text are required, and specs never change", () => {
+    for (const input of [{ text: "x" }, { title: " ", text: "x" }, { title: "t" }, { title: "t", text: "  " }, { title: "t", text: 3 }]) {
+      expectError(() => store.createSpec("bn", "a", input), "bad_request", 400);
+    }
+    expectError(() => store.createSpec("bn", " ", { title: "t", text: "x" }), "bad_request", 400);
+    const fixed = spec();
+    const boon = store.createBoon("bn", "a", { title: "x", spec: fixed.id });
+    store.update(boon.id, "a", { title: "renamed", spec: null });
+    expect(store.getSpec(fixed.id)).toEqual(fixed);
+  });
+
+  test("boons point to a spec of their own project; set on create, change or clear on update, no inheritance", () => {
+    store.createProject("xy");
+    const [s1, s2, other] = [spec(), spec(), spec("Other", "xy")];
+    const parent = store.createBoon("bn", "a", { title: "parent", spec: "BN-S1" });
+    expect(parent.spec).toBe(s1.id);
+    expect(store.createBoon("bn", "a", { title: "child", parent: parent.id }).spec).toBeNull();
+    expect(store.update(parent.id, "a", { spec: s2.id }).spec).toBe(s2.id);
+    expect(store.update(parent.id, "a", { spec: null }).spec).toBeNull();
+    expectError(() => store.createBoon("bn", "a", { title: "x", spec: other.id }), "bad_request", 400);
+    expectError(() => store.update(parent.id, "a", { spec: other.id }), "bad_request", 400);
+    expectError(() => store.createBoon("bn", "a", { title: "x", spec: "bn-s9" }), "not_found", 404);
+    expectError(() => store.createBoon("bn", "a", { title: "x", spec: 7 }), "bad_request", 400);
+    expectError(() => store.listBoons("bn", { spec: other.id }), "bad_request", 400);
+    expectError(() => store.ready("bn", "bn-s9"), "not_found", 404);
+  });
+
+  test("spec filters reuse readiness: a blocker outside the spec still blocks", () => {
+    const s = spec();
+    const outside = store.createBoon("bn", "a", { title: "outside", priority: 0 });
+    const blocked = store.createBoon("bn", "a", { title: "blocked", spec: s.id, priority: 0, blocked_by: [outside.id] });
+    const free = store.createBoon("bn", "a", { title: "free", spec: s.id });
+    const done = store.createBoon("bn", "a", { title: "done", spec: s.id });
+    store.close(done.id, "a");
+    expect(store.ready("bn", s.id).map((b) => b.id)).toEqual([free.id]);
+    expect(store.ready("bn").map((b) => b.id)).toEqual([outside.id, free.id]);
+    expect(store.blocked("bn", s.id)).toEqual([{ boon: store.getBoon(blocked.id), reasons: [{ kind: "blocker", id: outside.id }] }]);
+    expect(store.listBoons("bn", { spec: s.id }).map((b) => b.id)).toEqual([blocked.id, free.id]);
+    expect(store.listBoons("bn", { spec: s.id, all: true }).map((b) => b.id)).toEqual([blocked.id, free.id, done.id]);
+    store.close(outside.id, "a");
+    expect(store.ready("bn", s.id).map((b) => b.id)).toEqual([blocked.id, free.id]);
+  });
+
+  test("claimNext within a spec skips other specs and standalone boons", () => {
+    const [s1, s2] = [spec(), spec()];
+    store.createBoon("bn", "a", { title: "standalone", priority: 0 });
+    store.createBoon("bn", "a", { title: "other spec", priority: 0, spec: s2.id });
+    const mine = store.createBoon("bn", "a", { title: "mine", priority: 3, spec: s1.id });
+    expect(store.claimNext("bn", "alice", s1.id)).toMatchObject({ id: mine.id, status: "in_progress", claimed_by: "alice" });
+    expect(store.claimNext("bn", "alice", s1.id)).toBeNull();
+    expect(store.claimNext("bn", "alice")?.title).toBe("standalone");
+  });
+});
+
+describe("migration 4", () => {
+  test("upgrades a v3 database: boons keep their data, gain a null spec, and specs start at s1", () => {
+    const first = store.createBoon("bn", "a", { title: "existing" });
+    store.claim(first.id, "holder");
+    store.dispose();
+    const db = new Database(join(dir, "boons.db"));
+    db.run(DROP_MIGRATION_4 + " PRAGMA user_version = 3;");
+    db.close();
+    store = new Store({ path: join(dir, "boons.db"), now: () => clock });
+    expect(store.getBoon(first.id)).toMatchObject({ title: "existing", claimed_by: "holder", spec: null });
+    const s = store.createSpec("bn", "a", { title: "Agreement", text: "text" });
+    expect(s.id).toBe("bn-s1");
+    expect(store.createBoon("bn", "a", { title: "within", spec: s.id })).toMatchObject({ id: "bn-2", spec: s.id });
   });
 });

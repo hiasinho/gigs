@@ -100,6 +100,22 @@ See [GLOSSARY.md](GLOSSARY.md) for the exact vocabulary.
   `close` a boon: the server trusts its clients.
 - **Deferred** boons are never ready until `bn undefer`, or until their `--until` time passes.
 
+## Specs
+
+A spec is a fixed agreement (title and text) stored in Boons; IDs are `<prefix>-s<n>`. Specs are
+optional and never change: a changed agreement is a new spec, and boons are relinked with
+`bn update <id> --spec <new>`. A boon may point to one spec of its own project; children don't
+inherit it. `--spec <id>` on `list`, `ready`, `blocked` and `claim` limits them to boons pointing to
+that spec, with readiness unchanged (a blocker outside the spec still blocks). With `--spec`, the
+project comes from the spec id, so no `.boons.json` is needed.
+
+```sh
+bn spec create "Checkout v2" -d - < docs/checkout.md   # ws-s1
+bn create "Payment API" --spec ws-s1
+bn ready --spec ws-s1
+bn claim --spec ws-s1
+```
+
 ## Workflow
 
 ```sh
@@ -118,15 +134,16 @@ bn ready                 # ws-4, then ws-3
 
 ```
 bn serve                          bn init <prefix> [--name <name>]       bn projects
-bn create <title> [-t type] [-p 0-4] [-d desc|-] [--parent id] [--blocked-by id[,id]] [--discovered-from id]
-bn list [--all] [--status s[,s]] [--type t] [--parent id]
-bn ready                          bn blocked                             bn show <id> [--full]
-bn update <id> [--title t] [-d desc|-] [-t type] [-p n] [--parent id|none]
+bn create <title> [-t type] [-p 0-4] [-d desc|-] [--parent id] [--blocked-by id[,id]] [--discovered-from id] [--spec id]
+bn list [--all] [--status s[,s]] [--type t] [--parent id] [--spec id]
+bn ready [--spec id]              bn blocked [--spec id]                 bn show <id> [--full]
+bn update <id> [--title t] [-d desc|-] [-t type] [-p n] [--parent id|none] [--spec id|none]
 bn dep add|rm <id> <target-id> [--kind blocks|related|discovered-from]   # default: target blocks id
-bn claim [id]                     bn unclaim <id>                        bn heartbeat <id>
+bn claim [id] [--spec id]         bn unclaim <id>                        bn heartbeat <id>
 bn close <id...> [-r reason] [--force]                                   bn reopen <id>
 bn defer <id> [--until <ISO time|YYYY-MM-DD|30m|4h|2d>]                  bn undefer <id>
 bn comment <id> <text|->                                                 bn skill
+bn spec create <title> -d text|-  bn spec show <id> [--full]             bn spec list
 ```
 
 Types: `bug`, `feature`, `task`, `epic`, `chore`. Priority: `0` (critical) to `4` (backlog), default 2.
@@ -141,12 +158,13 @@ or `bn show <id> --human --full` for the complete text view.
 
 - Output defaults to one line of compact JSON with null and empty fields omitted:
   - `list`, `ready` and mutations (`create`, `update`, `close`, `defer`, `dep add`, ...) print rows:
-    `{id, title, type, priority, status, parent?, claimed_by?, claim_expires_at?, defer_until?, close_reason?}`
+    `{id, title, type, priority, status, parent?, spec?, claimed_by?, claim_expires_at?, defer_until?, close_reason?}`
     (`close` with several ids prints an array); `blocked` adds `reasons: [{kind, id, via?}]`.
   - `show` and `claim` print the boon with `description`, `ready`/`reasons` (open boons only),
     claim/close fields, `parent` and relations as `{id, title, status}` (unfinished only), `closed`
     counts per relation, and `comments: [{author, at, body}]`. `claim` prints `null` if nothing is ready.
   - `comment` prints `{boon_id, author, at, body}`.
+  - `spec create` and `spec list` print `{id, title}`; `spec show` prints `{id, title, text}`.
 - Add `--full` to get the raw API response instead (all fields, nested `{boon, ...}` for `show`).
 - Give every agent a unique actor name and pass `BN_ACTOR=claude-docs bn …` on every call,
   since claims are per actor and shells do not persist exports between calls.

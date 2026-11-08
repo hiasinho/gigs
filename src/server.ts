@@ -64,21 +64,28 @@ async function route(store: Store, req: Request, token: string | undefined): Pro
         status: q.get("status")?.split(",").map((s) => s.trim()).filter(Boolean),
         type: q.get("type") ?? undefined,
         parent: q.get("parent") ?? undefined,
+        spec: q.get("spec") ?? undefined,
         all: q.get("all") === "1" || q.get("all") === "true",
       });
     }
     case "POST /projects/:/boons":
       return json(store.createBoon(param, actor, await readBody(req)), 201);
     case "GET /projects/:/ready":
-      return store.ready(param);
+      return store.ready(param, url.searchParams.get("spec") ?? undefined);
     case "GET /projects/:/blocked":
-      return store.blocked(param);
+      return store.blocked(param, url.searchParams.get("spec") ?? undefined);
+    case "POST /projects/:/specs":
+      return json(store.createSpec(param, actor, await readBody(req)), 201);
+    case "GET /projects/:/specs":
+      return store.listSpecs(param);
+    case "GET /specs/:":
+      return store.getSpec(param);
     case "POST /boons/:/links": {
       const body = await readBody(req);
       return store.addLink(param, body.target, body.kind, actor);
     }
     case "POST /projects/:/claim":
-      return store.claimNext(param, actor);
+      return store.claimNext(param, actor, (await readBody(req)).spec ?? undefined);
     case "GET /boons/:":
       return store.getDetail(param);
     case "POST /boons/:/claim":

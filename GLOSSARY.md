@@ -73,7 +73,8 @@ A link from a boon to the boon whose work turned it up.
 A set of boons connected by blockers. A plan is not a separate thing in Boons; it exists only as those connections.
 
 **Spec**:
-An ordinary document outside Boons that a boon's description refers to. Boons does not store or manage specs.
+A fixed agreement about a body of work, kept in Boons, that boons can point to. A spec never changes once made; a changed agreement is a new spec. A boon points to at most one spec, of its own project, and pointing to one changes nothing about whether the boon is ready.
+_Avoid_: Document, requirements
 
 ### Picking up work
 
