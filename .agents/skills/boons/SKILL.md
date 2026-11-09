@@ -1,10 +1,11 @@
 ---
 name: boons
-description: Boons ticket system via `bn` CLI. Use when repo has .boons.json, or user mentions boons/bn, tickets, tasks to track, what's next, claiming work.
+description: Boons ticket system via `bn` CLI. Use when repo has .boons.json, or user mentions boons/bn, tickets, track this, what's next, claiming work, resume after compaction.
 ---
 
 # Boons (`bn`)
 Ticket system. Ticket = boon, id like `bn-42`.
+Use for work that outlives this session or others pick up; in-session steps → your own todo list.
 Every call: `bn … --as <you>`. Pick a meaningful name once per session, unique among agents (short suffix helps, e.g. `auth-refactor-3f9a`), reuse it.
 Output: JSON, empty fields omitted; `--full` = all fields. Syntax: `bn help`, `bn <cmd> --help`.
 
@@ -13,11 +14,12 @@ Output: JSON, empty fields omitted; `--full` = all fields. Syntax: `bn help`, `b
 bn ready                  # claimable now
 bn claim [id]             # no id = next ready; returns boon (description, relations, comments) or null
 # work
-bn comment <id> "<text>"
+bn comment <id> "<text>"   # as you go: survives compaction, lets others resume
 bn close <id> [-r "<reason>"]
 ```
 `bn unclaim <id>` releases a claim.
 Claim lapses after ~60 min without your activity; comment/update/link renews; long work: `bn heartbeat <id>`.
+Lost track (compaction/new session): `bn list --status in_progress`, yours by `claimed_by`, then `bn show <id>`.
 
 ## File work
 ```
