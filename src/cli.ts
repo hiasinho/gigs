@@ -18,6 +18,8 @@ const GLOBAL_OPTIONS = {
   help: { type: "boolean", short: "h" },
 } satisfies Options;
 
+const LABEL_FILTER_OPTIONS = { label: { type: "string" }, "exclude-label": { type: "string" } } satisfies Options;
+
 interface Ctx {
   args: string[];
   values: Values;
@@ -85,7 +87,7 @@ const COMMANDS: Record<string, Command> = {
   },
 
   create: {
-    usage: "create <title> [-t type] [-p 0-4] [-d desc|-] [--parent id] [--blocked-by id[,id]] [--discovered-from id] [--spec id]",
+    usage: "create <title> [-t type] [-p 0-4] [-d desc|-] [--parent id] [--blocked-by id[,id]] [--discovered-from id] [--spec id] [--label l[,l]]",
     summary: "create a boon (`-d -` reads the description from stdin; with --spec, in the spec's project)",
     options: {
       type: { type: "string", short: "t" },
@@ -95,6 +97,7 @@ const COMMANDS: Record<string, Command> = {
       "blocked-by": { type: "string" },
       "discovered-from": { type: "string" },
       spec: { type: "string" },
+      label: { type: "string" },
     },
     async run({ args, values, json, print, client, project }) {
       const title = args.join(" ");
@@ -109,6 +112,7 @@ const COMMANDS: Record<string, Command> = {
         blocked_by: (values["blocked-by"] as string | undefined)?.split(","),
         discovered_from: values["discovered-from"] as string | undefined,
         spec: values.spec as string | undefined,
+        labels: labelList(values.label),
       });
       if (json) return print(boon, row);
       console.log(boon.id);
@@ -116,14 +120,15 @@ const COMMANDS: Record<string, Command> = {
   },
 
   list: {
-    usage: "list [--all] [--status s[,s]] [--type t] [--parent id] [--spec id]",
-    summary: "list boons (default: unfinished)",
+    usage: "list [--all] [--status s[,s]] [--type t] [--parent id] [--spec id] [--label l[,l]] [--exclude-label l[,l]]",
+    summary: "list boons (default: unfinished; --label: has all of them, --exclude-label: has none of them)",
     options: {
       all: { type: "boolean" },
       status: { type: "string" },
       type: { type: "string" },
       parent: { type: "string" },
       spec: { type: "string" },
+      ...LABEL_FILTER_OPTIONS,
     },
     async run({ values, json, print, client, project }) {
       const boons = await client().listBoons(project(), {
@@ -132,6 +137,7 @@ const COMMANDS: Record<string, Command> = {
         parent: values.parent as string | undefined,
         type: values.type as string | undefined,
         spec: values.spec as string | undefined,
+        ...labelQuery(values),
       });
       if (json) return print(boons, (list) => list.map(row));
       console.log(boons.length ? rows(boons) : "no boons");
@@ -139,11 +145,11 @@ const COMMANDS: Record<string, Command> = {
   },
 
   ready: {
-    usage: "ready [--spec id]",
+    usage: "ready [--spec id] [--label l[,l]] [--exclude-label l[,l]]",
     summary: "ready boons in priority order",
-    options: { spec: { type: "string" } },
+    options: { spec: { type: "string" }, ...LABEL_FILTER_OPTIONS },
     async run({ values, json, print, client, project }) {
-      const boons = await client().ready(project(), values.spec as string | undefined);
+      const boons = await client().ready(project(), values.spec as string | undefined, labelQuery(values));
       if (json) return print(boons, (list) => list.map(row));
       console.log(boons.length ? rows(boons) : "no ready boons");
     },
@@ -178,6 +184,21 @@ const COMMANDS: Record<string, Command> = {
     },
   },
 
+  label: {
+    usage: "label add|rm <id> <label...>",
+    summary: "add or remove labels: inert markers, lowercase without spaces, e.g. needs-triage or triage:needs-info (adding a present or removing a missing label is a no-op; any status)",
+    async run({ args, json, print, client }) {
+      const action = arg(args, 0, "add|rm");
+      if (action !== "add" && action !== "rm") throw new Error("expected `bn label add` or `bn label rm`");
+      const id = arg(args, 1, "id");
+      const labels = labelList(args.slice(2).join(","));
+      if (!labels?.length) throw new Error("missing <label>");
+      const boon = await client().update(id, action === "add" ? { add_labels: labels } : { remove_labels: labels });
+      if (json) return print(boon, row);
+      console.log(`${boon.id} labels: ${boon.labels.join(", ") || "none"}`);
+    },
+  },
+
   show: {
     usage: "show <id> [--full]",
     summary: "show a compact boon (--full shows everything)",
@@ -189,7 +210,7 @@ const COMMANDS: Record<string, Command> = {
   },
 
   update: {
-    usage: "update <id> [--title t] [-d desc|-] [-t type] [-p n] [--parent id|none] [--spec id|none]",
+    usage: "update <id> [--title t] [-d desc|-] [-t type] [-p n] [--parent id|none] [--spec id|none] [--add-label l[,l]] [--remove-label l[,l]]",
     summary: "change a boon's fields (`none` clears the parent or spec)",
     options: {
       title: { type: "string" },
@@ -198,6 +219,8 @@ const COMMANDS: Record<string, Command> = {
       priority: { type: "string", short: "p" },
       parent: { type: "string" },
       spec: { type: "string" },
+      "add-label": { type: "string" },
+      "remove-label": { type: "string" },
     },
     async run({ args, values, json, print, client }) {
       const id = arg(args, 0, "id");
@@ -208,6 +231,8 @@ const COMMANDS: Record<string, Command> = {
         priority: values.priority === undefined ? undefined : parsePriority(values.priority as string),
         parent: values.parent === "none" ? null : (values.parent as string | undefined),
         spec: values.spec === "none" ? null : (values.spec as string | undefined),
+        add_labels: labelList(values["add-label"]),
+        remove_labels: labelList(values["remove-label"]),
       };
       if (Object.values(changes).every((v) => v === undefined)) throw new Error("nothing to update (see `bn update --help`)");
       const boon = await client().update(id, changes);
@@ -533,6 +558,15 @@ function specProject(spec: unknown): string | undefined {
   return m[1]!.toLowerCase();
 }
 
+/** `a,b` as a list of labels; the server validates them. */
+function labelList(value: unknown): string[] | undefined {
+  return typeof value === "string" ? value.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
+}
+
+function labelQuery(values: Values) {
+  return { label: values.label as string | undefined, exclude_label: values["exclude-label"] as string | undefined };
+}
+
 function arg(args: string[], i: number, name: string): string {
   const v = args[i];
   if (!v) throw new Error(`missing <${name}>`);
@@ -581,7 +615,7 @@ function row(b: Boon) {
   const claimed = b.status === "in_progress";
   return compact({
     id: b.id, title: b.title, type: b.type, priority: b.priority, status: b.status, parent: b.parent, spec: b.spec,
-    claimed_by: claimed ? b.claimed_by : null, claim_expires_at: claimed ? b.claim_expires_at : null,
+    labels: b.labels, claimed_by: claimed ? b.claimed_by : null, claim_expires_at: claimed ? b.claim_expires_at : null,
     defer_until: b.defer_until, close_reason: b.status === "closed" ? b.close_reason : null,
   });
 }
@@ -600,7 +634,7 @@ function compactShow(detail: BoonDetail) {
     if (n) closed[key] = n;
   }
   return compact({
-    id: b.id, title: b.title, type: b.type, priority: b.priority, status: b.status, spec: b.spec, description: b.description,
+    id: b.id, title: b.title, type: b.type, priority: b.priority, status: b.status, spec: b.spec, labels: b.labels, description: b.description,
     ready: open ? ready : null, reasons: open && !ready ? reasons : null,
     claimed_by: claimed ? b.claimed_by : null, claim_expires_at: claimed ? b.claim_expires_at : null,
     defer_until: b.defer_until,
@@ -621,7 +655,8 @@ function rows(boons: Boon[]): string {
         `P${b.priority}`,
         b.status.padEnd(11),
         b.type.padEnd(7),
-        b.title + (b.claimed_by ? `  [@${b.claimed_by}]` : "") + (b.defer_until ? `  [until ${b.defer_until}]` : ""),
+        b.title + (b.claimed_by ? `  [@${b.claimed_by}]` : "") + (b.defer_until ? `  [until ${b.defer_until}]` : "") +
+          (b.labels.length ? `  [${b.labels.join(", ")}]` : ""),
       ].join("  "),
     )
     .join("\n");
@@ -645,6 +680,7 @@ function showCompactDetail(detail: BoonDetail): string {
   if (b.status === "closed") status = `closed by ${b.closed_by}${b.close_reason ? `: ${b.close_reason}` : ""}`;
   const lines = [`${b.id}  ${b.title}`, `${b.type} · P${b.priority} · ${status}`];
   if (b.spec) lines.push(`spec: ${b.spec}`);
+  if (b.labels.length) lines.push(`labels: ${b.labels.join(", ")}`);
   if (detail.parent) lines.push(`parent: ${detail.parent.id} ${detail.parent.title}`);
   if (b.status === "open" && !ready) lines.push(`not ready: ${reasonText(reasons)}`);
   for (const key of RELATIONS) {
@@ -679,6 +715,7 @@ function showDetail(detail: BoonDetail): string {
   field("type", b.type);
   field("priority", `P${b.priority}`);
   if (b.spec) field("spec", b.spec);
+  if (b.labels.length) field("labels", b.labels.join(", "));
   field("created", `${b.created_at} by ${b.created_by}`);
   field("updated", b.updated_at);
   if (b.closed_at) field("closed", `${b.closed_at} by ${b.closed_by}${b.close_reason ? `: ${b.close_reason}` : ""}`);

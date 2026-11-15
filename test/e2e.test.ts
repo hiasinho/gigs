@@ -404,7 +404,7 @@ test("errors, help and connection failures", async () => {
   expect(help.stdout).toContain("bn defer <id> [--until");
   expect(help.stdout.split("\n").every((line) => line.length <= 80)).toBe(true);
   expect((await bn(["help"])).stdout).toBe(help.stdout);
-  expect(help.stdout).toContain("  bn ready [--spec id]\n    ready boons in priority order\n");
+  expect(help.stdout).toContain("  bn ready [--spec id] [--label l[,l]] [--exclude-label l[,l]]\n    ready boons in priority order\n");
   expect((await bn(["show", "--help"])).stdout).toBe("usage: bn show <id> [--full]\n\nshow a compact boon (--full shows everything)\n");
   const createHelp = await bn(["create", "--help"]);
   expect(createHelp.code).toBe(0);
@@ -529,4 +529,39 @@ test("spec edit and history through CLI: flags, stdin, snapshots, raw and human 
   ]) expect((await bn(["spec", ...args], opts)).code).toBe(1);
   expect(await bnJson(["spec", "list"], opts)).toEqual([{ ...first, version: 5 }]);
   expect(await bnJson(["spec", "history", first.id], opts)).toHaveLength(5);
+});
+
+test("labels through the real CLI: create, label add|rm, update, filters, rows, show and human output", async () => {
+  store.createProject("lx");
+  const opts = { env: { BN_PROJECT: "lx" } };
+  const a = await bnJson(["create", "Triage me", "--label", "needs-triage,agent"], opts);
+  expect(a).toEqual({ id: "lx-1", title: "Triage me", type: "task", priority: 2, status: "open", labels: ["agent", "needs-triage"] });
+  const b = await bnJson(["create", "Plain", "-p", "3"], opts);
+  expect(b).not.toHaveProperty("labels");
+  expect(await bnJson(["label", "add", b.id, "agent", "triage:needs-info,agent"], opts)).toEqual({ ...b, labels: ["agent", "triage:needs-info"] });
+  expect(await bnJson(["label", "rm", b.id, "triage:needs-info", "missing"], opts)).toEqual({ ...b, labels: ["agent"] });
+  expect(await bnJson(["update", a.id, "--add-label", "ready-for-agent", "--remove-label", "needs-triage"], opts)).toEqual({ ...a, labels: ["agent", "ready-for-agent"] });
+  expect((await bn(["label", "add", a.id, "Needs Triage"], opts)).stderr).toContain("invalid label");
+  expect((await bn(["label", "add", a.id], opts)).stderr).toContain("missing <label>");
+  expect((await bn(["label", "tag", a.id, "x"], opts)).stderr).toContain("expected `bn label add` or `bn label rm`");
+  expect((await bn(["label", "add", b.id, "x", "--human"], opts)).stdout).toBe(`${b.id} labels: agent, x\n`);
+  expect((await bn(["label", "rm", b.id, "x", "agent", "--human"], opts)).stdout).toBe(`${b.id} labels: none\n`);
+
+  const ids = async (args: string[]) => (await bnJson(args, opts)).map((x: any) => x.id);
+  expect(await ids(["list", "--label", "agent"])).toEqual([a.id]);
+  expect(await ids(["list", "--exclude-label", "agent"])).toEqual([b.id]);
+  expect(await ids(["ready", "--label", "agent,ready-for-agent"])).toEqual([a.id]);
+  expect(await ids(["ready", "--exclude-label", "ready-for-agent"])).toEqual([b.id]);
+  expect((await bn(["list", "--label", "Bad"], opts)).code).toBe(1);
+
+  // Closed boons keep and change labels too.
+  await bnJson(["close", b.id, "-r", "dupe"], opts);
+  expect(await bnJson(["label", "add", b.id, "duplicate"], opts)).toMatchObject({ status: "closed", labels: ["duplicate"] });
+  expect(await ids(["list", "--all", "--label", "duplicate"])).toEqual([b.id]);
+
+  expect(await bnJson(["show", a.id], opts)).toMatchObject({ id: a.id, labels: ["agent", "ready-for-agent"], ready: true });
+  expect((await bnJson(["show", a.id, "--full"], opts)).boon.labels).toEqual(["agent", "ready-for-agent"]);
+  expect((await bn(["show", a.id, "--human"], opts)).stdout).toContain("\nlabels: agent, ready-for-agent\n");
+  expect((await bn(["show", a.id, "--human", "--full"], opts)).stdout).toContain("\nlabels:    agent, ready-for-agent\n");
+  expect((await bn(["list", "--human"], opts)).stdout).toBe(`${a.id}  P2  open         task     Triage me  [agent, ready-for-agent]\n`);
 });

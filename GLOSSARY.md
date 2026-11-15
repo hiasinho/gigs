@@ -32,6 +32,10 @@ _Avoid_: User, assignee, owner
 A note an actor adds to a boon over time, such as progress or a handoff.
 _Avoid_: Note, message
 
+**Label**:
+A free-form marker on a boon, such as `wontfix` or `triage:needs-info`, written in lowercase without spaces. A boon has any number of labels, closed or not. Labels are inert: they never change whether a boon is ready, blocked, or claimable; they only help to find boons.
+_Avoid_: Tag, category
+
 ### Status
 
 **Open**:

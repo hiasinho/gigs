@@ -99,6 +99,11 @@ See [GLOSSARY.md](GLOSSARY.md) for the exact vocabulary.
   holder (any update, comment, link change, or `bn heartbeat` renews). Anyone may `unclaim` or
   `close` a boon: the server trusts its clients.
 - **Deferred** boons are never ready until `bn undefer`, or until their `--until` time passes.
+- **Labels** are free-form markers such as `wontfix` or `triage:needs-info`: lowercase letters,
+  digits, `.`, `_`, `:` and `-`, starting with a letter or digit, up to 50 characters. They are inert:
+  they never change ready, blocked or claiming, but `list` and `ready` can filter by them
+  (`--label a,b`: all present; `--exclude-label a,b`: none present). Adding a present label or
+  removing a missing one is a no-op; labels work on boons of any status, closed included.
 
 ## Specs
 
@@ -145,11 +150,13 @@ bn ready                 # ws-4, then ws-3
 
 ```
 bn serve                          bn init <prefix> [--name <name>]       bn projects
-bn create <title> [-t type] [-p 0-4] [-d desc|-] [--parent id] [--blocked-by id[,id]] [--discovered-from id] [--spec id]
-bn list [--all] [--status s[,s]] [--type t] [--parent id] [--spec id]
-bn ready [--spec id]              bn blocked [--spec id]                 bn show <id> [--full]
-bn update <id> [--title t] [-d desc|-] [-t type] [-p n] [--parent id|none] [--spec id|none]
+bn create <title> [-t type] [-p 0-4] [-d desc|-] [--parent id] [--blocked-by id[,id]] [--discovered-from id] [--spec id] [--label l[,l]]
+bn list [--all] [--status s[,s]] [--type t] [--parent id] [--spec id] [--label l[,l]] [--exclude-label l[,l]]
+bn ready [--spec id] [--label l[,l]] [--exclude-label l[,l]]
+bn blocked [--spec id]            bn show <id> [--full]
+bn update <id> [--title t] [-d desc|-] [-t type] [-p n] [--parent id|none] [--spec id|none] [--add-label l[,l]] [--remove-label l[,l]]
 bn dep add|rm <id> <target-id> [--kind blocks|related|discovered-from]   # default: target blocks id
+bn label add|rm <id> <label...>
 bn claim [id] [--spec id]         bn unclaim <id>                        bn heartbeat <id>
 bn close <id...> [-r reason] [--force]                                   bn reopen <id>
 bn defer <id> [--until <ISO time|YYYY-MM-DD|30m|4h|2d>]                  bn undefer <id>
@@ -172,9 +179,9 @@ or `bn show <id> --human --full` for the complete text view.
 
 - Output defaults to one line of compact JSON with null and empty fields omitted:
   - `list`, `ready` and mutations (`create`, `update`, `close`, `defer`, `dep add`, ...) print rows:
-    `{id, title, type, priority, status, parent?, spec?, claimed_by?, claim_expires_at?, defer_until?, close_reason?}`
+    `{id, title, type, priority, status, parent?, spec?, labels?, claimed_by?, claim_expires_at?, defer_until?, close_reason?}`
     (`close` with several ids prints an array); `blocked` adds `reasons: [{kind, id, via?}]`.
-  - `show` and `claim` print the boon with `description`, `ready`/`reasons` (open boons only),
+  - `show` and `claim` print the boon with `labels?`, `description`, `ready`/`reasons` (open boons only),
     claim/close fields, `parent` and relations as `{id, title, status}` (unfinished only), `closed`
     counts per relation, and `comments: [{author, at, body}]`. `claim` prints `null` if nothing is ready.
   - `comment` prints `{boon_id, author, at, body}`.

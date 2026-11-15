@@ -40,6 +40,15 @@ bn spec update <id> [--title t] [-d text|-]
 ```
 `--spec <id>` on `create`, `update` (`none` clears), `list`, `ready`, `blocked`, `claim` (no id): only boons of that spec; project comes from the spec id.
 
+## Labels
+Free-form markers (lowercase, no spaces; `a-z0-9._:-`), e.g. `wontfix`, `triage:needs-info`. Inert: never affect ready/blocked/claim.
+```
+bn label add|rm <id> <label...>                        # no-op if already present/missing; any status
+bn update <id> --add-label a --remove-label b          # swap in one call
+bn create "<title>" --label a,b
+bn list|ready --label a,b --exclude-label c            # all of a,b; none of c
+```
+
 ## Other
 `show <id>` · `list [--all]` · `blocked` · `update <id> [--title t] [-d text|-] [-t type] [-p n] [--parent id|none]` · `dep add|rm <id> <blocker-id> [--kind related|discovered-from]` · `defer <id> [--until 4h|2d|YYYY-MM-DD]` · `undefer <id>` · `reopen <id>`
 

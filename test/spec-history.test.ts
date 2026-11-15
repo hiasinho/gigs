@@ -117,7 +117,7 @@ test("migration 5 backfills the current v4 state at version 1 using its creator 
   store.createBoon("bn", "a", { title: "linked", spec: first.id });
   store.dispose();
   const db = new Database(path);
-  db.run("DROP TABLE spec_versions; ALTER TABLE specs DROP COLUMN version; PRAGMA user_version = 4;");
+  db.run("DROP TABLE labels; DROP TABLE spec_versions; ALTER TABLE specs DROP COLUMN version; PRAGMA user_version = 4;");
   db.close();
   store = new Store({ path });
   expect(store.getSpec(first.id)).toEqual({ ...first, title: "Current", text: "Current text" });

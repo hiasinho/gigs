@@ -21,6 +21,8 @@ export interface Boon {
   status: Status;
   parent: string | null;
   spec: string | null;
+  /** Sorted; inert markers that never affect readiness or claims. */
+  labels: string[];
   claimed_by: string | null;
   claimed_at: string | null;
   claim_expires_at: string | null;
@@ -99,6 +101,7 @@ export interface NewBoon {
   blocked_by?: unknown;
   discovered_from?: unknown;
   spec?: unknown;
+  labels?: unknown;
 }
 
 export interface NewSpec {
@@ -114,10 +117,18 @@ export interface BoonChanges {
   priority?: unknown;
   parent?: unknown;
   spec?: unknown;
+  add_labels?: unknown;
+  remove_labels?: unknown;
 }
-const CHANGEABLE = ["title", "description", "type", "priority", "parent", "spec"];
+const CHANGEABLE = ["title", "description", "type", "priority", "parent", "spec", "add_labels", "remove_labels"];
 
-export interface ListFilter {
+/** Only boons with all of `label` and none of `exclude_label`. */
+export interface LabelFilter {
+  label?: string[];
+  exclude_label?: string[];
+}
+
+export interface ListFilter extends LabelFilter {
   status?: string[];
   type?: string;
   all?: boolean;
@@ -224,18 +235,29 @@ const MIGRATIONS = [
   INSERT INTO spec_versions (spec_id, version, title, text, kind, change, changed_by, changed_at)
     SELECT id, 1, title, text, 'create', NULL, created_by, created_at FROM specs;
   `,
+  `
+  CREATE TABLE labels (
+    boon_id TEXT NOT NULL REFERENCES boons(id),
+    label   TEXT NOT NULL,
+    PRIMARY KEY (boon_id, label)
+  );
+  CREATE INDEX labels_label ON labels(label);
+  `,
 ];
 
 const PROJECT_COLUMNS = "prefix, name, created_at";
 const BOON_COLUMNS =
   "id, project, title, description, type, priority, status, claimed_by, claimed_at, claim_expires_at, defer_until, " +
-  "created_by, created_at, updated_at, closed_by, closed_at, close_reason, parent, spec";
+  "created_by, created_at, updated_at, closed_by, closed_at, close_reason, parent, spec, " +
+  "(SELECT json_group_array(label) FROM labels WHERE boon_id = boons.id) AS labels";
 const SPEC_COLUMNS = "id, project, title, text, version, created_by, created_at";
 const COMMENT_COLUMNS = "id, boon_id, author, body, created_at";
 const CLEAR_CLAIM = "claimed_by = NULL, claimed_at = NULL, claim_expires_at = NULL";
 const READY_ORDER = "ORDER BY priority, created_at, number";
 
 const PREFIX_RE = /^[a-z][a-z0-9]{1,2}$/;
+export const LABEL_RE = /^[a-z0-9][a-z0-9._:-]*$/;
+export const LABEL_MAX = 50;
 
 export interface StoreOptions {
   path: string;
@@ -311,6 +333,7 @@ export class Store {
       const blockers = ((input.blocked_by ?? []) as unknown[]).map((id) => this.reference(id));
       const discovered = input.discovered_from == null ? null : this.reference(input.discovered_from);
       const spec = input.spec == null ? null : this.specReference(input.spec, p.prefix);
+      const labels = input.labels === undefined ? [] : checkLabels(input.labels, "labels");
 
       const { next_number: n } = this.db
         .query("UPDATE projects SET next_number = next_number + 1 WHERE prefix = ? RETURNING next_number - 1 AS next_number")
@@ -326,6 +349,7 @@ export class Store {
       this.db.query("UPDATE boons SET parent = ?, spec = ? WHERE id = ?").run(parent, spec, id);
       for (const target of blockers) this.insertLink(id, target, "blocks");
       if (discovered) this.insertLink(id, discovered, "discovered-from");
+      this.changeLabels(id, labels, []);
       this.checkCycles();
       return this.mustGet(id);
     });
@@ -373,9 +397,14 @@ export class Store {
       if (changes.priority !== undefined) sets.priority = checkPriority(changes.priority);
       if (changes.parent !== undefined) sets.parent = changes.parent === null ? null : this.reference(changes.parent);
       if (changes.spec !== undefined) sets.spec = changes.spec === null ? null : this.specReference(changes.spec, boon.project);
+      const add = changes.add_labels === undefined ? undefined : checkLabels(changes.add_labels, "add_labels");
+      const remove = changes.remove_labels === undefined ? undefined : checkLabels(changes.remove_labels, "remove_labels");
+      const both = add?.filter((l) => remove?.includes(l)) ?? [];
+      if (both.length) throw badRequest(`cannot both add and remove label ${both.join(", ")}`);
       const keys = Object.keys(sets);
-      if (!keys.length) throw badRequest(`nothing to update; give at least one of ${CHANGEABLE.join(", ")}`);
-      this.db.query(`UPDATE boons SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`).run(...Object.values(sets), boon.id);
+      if (!keys.length && !add && !remove) throw badRequest(`nothing to update; give at least one of ${CHANGEABLE.join(", ")}`);
+      if (keys.length) this.db.query(`UPDATE boons SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`).run(...Object.values(sets), boon.id);
+      this.changeLabels(boon.id, add ?? [], remove ?? []);
       if ("parent" in sets) this.checkCycles();
       this.touch(boon, actor);
       return this.mustGet(boon.id);
@@ -423,15 +452,14 @@ export class Store {
         where.push("spec = ?");
         params.push(this.specReference(filter.spec, p.prefix));
       }
-      return this.db
-        .query(`SELECT ${BOON_COLUMNS} FROM boons WHERE ${where.join(" AND ")} ORDER BY priority, number`)
-        .all(...params) as Boon[];
+      labelClauses(filter, where, params);
+      return this.boons(`SELECT ${BOON_COLUMNS} FROM boons WHERE ${where.join(" AND ")} ORDER BY priority, number`, ...params);
     });
   }
 
-  /** Ready boons of a project (only those pointing to `spec`, if given), in the order they should be picked up. */
-  ready(project: string, spec?: unknown): Boon[] {
-    return this.op(() => this.readyBoons(this.mustGetProject(project).prefix, spec));
+  /** Ready boons of a project (only those pointing to `spec` and matching `labels`, if given), in the order they should be picked up. */
+  ready(project: string, spec?: unknown, labels: LabelFilter = {}): Boon[] {
+    return this.op(() => this.readyBoons(this.mustGetProject(project).prefix, spec, labels));
   }
 
   blocked(project: string, spec?: unknown): { boon: Boon; reasons: Reason[] }[] {
@@ -768,11 +796,21 @@ export class Store {
   }
 
   private mustGet(id: string): Boon {
-    const boon = this.db
-      .query(`SELECT ${BOON_COLUMNS} FROM boons WHERE id = ?`)
-      .get(id.trim().toLowerCase()) as Boon | null;
+    const [boon] = this.boons(`SELECT ${BOON_COLUMNS} FROM boons WHERE id = ?`, id.trim().toLowerCase());
     if (!boon) throw notFound(`boon ${id} not found`);
     return boon;
+  }
+
+  /** Runs a query selecting BOON_COLUMNS, decoding each boon's labels. */
+  private boons(sql: string, ...params: (string | number)[]): Boon[] {
+    const rows = this.db.query(sql).all(...params) as (Omit<Boon, "labels"> & { labels: string })[];
+    return rows.map((row) => ({ ...row, labels: (JSON.parse(row.labels) as string[]).sort() }));
+  }
+
+  /** Adding a present label or removing a missing one is a no-op. */
+  private changeLabels(id: string, add: string[], remove: string[]) {
+    for (const label of add) this.db.query("INSERT OR IGNORE INTO labels (boon_id, label) VALUES (?, ?)").run(id, label);
+    for (const label of remove) this.db.query("DELETE FROM labels WHERE boon_id = ? AND label = ?").run(id, label);
   }
 
   private reference(id: unknown): string {
@@ -801,7 +839,7 @@ export class Store {
   }
 
   private graph(): Graph {
-    const boons = this.db.query(`SELECT ${BOON_COLUMNS} FROM boons ORDER BY id`).all() as Boon[];
+    const boons = this.boons(`SELECT ${BOON_COLUMNS} FROM boons ORDER BY id`);
     return { boons: new Map(boons.map((b) => [b.id, b])), links: this.db.query("SELECT * FROM links ORDER BY boon_id, target_id, kind").all() as Link[] };
   }
 
@@ -863,17 +901,22 @@ export class Store {
     return { ready: boon.status === "open" && reasons.length === 0, reasons };
   }
 
-  /** Boons of the project in pickup order; with `spec`, only those pointing to it. */
-  private orderedBoons(prefix: string, spec?: unknown): Boon[] {
-    if (spec === undefined) return this.db.query(`SELECT ${BOON_COLUMNS} FROM boons WHERE project = ? ${READY_ORDER}`).all(prefix) as Boon[];
-    const specId = this.specReference(spec, prefix);
-    return this.db.query(`SELECT ${BOON_COLUMNS} FROM boons WHERE project = ? AND spec = ? ${READY_ORDER}`).all(prefix, specId) as Boon[];
+  /** Boons of the project in pickup order; with `spec`, only those pointing to it; with `labels`, only those matching. */
+  private orderedBoons(prefix: string, spec?: unknown, labels: LabelFilter = {}): Boon[] {
+    const where = ["project = ?"];
+    const params: string[] = [prefix];
+    if (spec !== undefined) {
+      where.push("spec = ?");
+      params.push(this.specReference(spec, prefix));
+    }
+    labelClauses(labels, where, params);
+    return this.boons(`SELECT ${BOON_COLUMNS} FROM boons WHERE ${where.join(" AND ")} ${READY_ORDER}`, ...params);
   }
 
-  /** Readiness is always derived from the whole graph, so a blocker outside the spec still blocks. */
-  private readyBoons(prefix: string, spec?: unknown): Boon[] {
+  /** Readiness is always derived from the whole graph, so a blocker outside the spec or label filter still blocks. */
+  private readyBoons(prefix: string, spec?: unknown, labels?: LabelFilter): Boon[] {
     const graph = this.graph();
-    return this.orderedBoons(prefix, spec).filter((boon) => this.readiness(boon, graph).ready);
+    return this.orderedBoons(prefix, spec, labels).filter((boon) => this.readiness(boon, graph).ready);
   }
 
   private claimBoon(id: string, actor: string): Boon {
@@ -923,6 +966,31 @@ function summary({ id, title, status, type, priority }: Boon): BoonSummary {
 function checkLinkKind(kind: unknown): LinkKind {
   if (!LINK_KINDS.includes(kind as LinkKind)) throw badRequest(`kind must be one of ${LINK_KINDS.join(", ")}`);
   return kind as LinkKind;
+}
+
+/** A list of unique labels, each lowercase without spaces: a letter or digit, then letters, digits, `.`, `_`, `:` or `-`. */
+function checkLabels(v: unknown, field: string): string[] {
+  if (!Array.isArray(v)) throw badRequest(`${field} must be an array of labels`);
+  for (const label of v) {
+    if (typeof label !== "string" || !LABEL_RE.test(label) || label.length > LABEL_MAX) {
+      throw badRequest(`invalid label ${JSON.stringify(label)}: use up to ${LABEL_MAX} lowercase letters, digits, '.', '_', ':' or '-', starting with a letter or digit`);
+    }
+  }
+  return [...new Set(v as string[])];
+}
+
+/** Appends SQL conditions for a label filter on `boons`. */
+function labelClauses(filter: LabelFilter, where: string[], params: (string | number)[]) {
+  const has = "SELECT 1 FROM labels WHERE labels.boon_id = boons.id AND labels.label";
+  for (const label of checkLabels(filter.label ?? [], "label")) {
+    where.push(`EXISTS (${has} = ?)`);
+    params.push(label);
+  }
+  const excluded = checkLabels(filter.exclude_label ?? [], "exclude_label");
+  if (excluded.length) {
+    where.push(`NOT EXISTS (${has} IN (${excluded.map(() => "?").join(", ")}))`);
+    params.push(...excluded);
+  }
 }
 
 function checkSpecText(text: unknown): string {

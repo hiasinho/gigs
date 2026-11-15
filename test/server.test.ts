@@ -210,3 +210,25 @@ test("spec edit, history and version routes validate inputs and preserve snapsho
   expect((await call("GET", "/specs/vh-s99/history")).status).toBe(404);
   expect((await call("POST", "/specs/vh-s99/edits", { actor: "a", body: JSON.stringify({ edits }) })).status).toBe(404);
 });
+
+test("label routes: set on create, change via PATCH, filter list and ready by query", async () => {
+  store.createProject("lb");
+  const post = (path: string, body: unknown) => call("POST", path, { actor: "a", body: JSON.stringify(body) });
+  const patch = (id: string, body: unknown) => call("PATCH", `/boons/${id}`, { actor: "a", body: JSON.stringify(body) });
+  const a = (await (await post("/projects/lb/boons", { title: "a", labels: ["agent", "triage:ready"] })).json()) as any;
+  expect(a.labels).toEqual(["agent", "triage:ready"]);
+  const b = (await (await post("/projects/lb/boons", { title: "b" })).json()) as any;
+  expect(b.labels).toEqual([]);
+  expect((await post("/projects/lb/boons", { title: "x", labels: ["Bad Label"] })).status).toBe(400);
+  expect(await (await patch(b.id, { add_labels: ["agent", "wontfix"], remove_labels: ["missing"] })).json()).toMatchObject({ labels: ["agent", "wontfix"] });
+  expect((await patch(b.id, { add_labels: ["UPPER"] })).status).toBe(400);
+  expect((await patch(b.id, { add_labels: ["x"], remove_labels: ["x"] })).status).toBe(400);
+  expect(((await (await call("GET", `/boons/${b.id}`)).json()) as any).boon.labels).toEqual(["agent", "wontfix"]);
+
+  const ids = async (path: string) => ((await (await call("GET", path)).json()) as any[]).map((x) => x.id);
+  expect(await ids("/projects/lb/boons?label=agent")).toEqual([a.id, b.id]);
+  expect(await ids("/projects/lb/boons?label=agent,%20wontfix")).toEqual([b.id]);
+  expect(await ids("/projects/lb/boons?exclude_label=wontfix")).toEqual([a.id]);
+  expect(await ids("/projects/lb/ready?label=agent&exclude_label=triage:ready")).toEqual([b.id]);
+  expect((await call("GET", "/projects/lb/ready?label=Nope")).status).toBe(400);
+});
