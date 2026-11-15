@@ -27,6 +27,13 @@ bn create "<title>" -t bug|feature|task|epic|chore -p 0-4 [--parent id] [--block
 ```
 p0 critical … p4 backlog, default 2. `-d -` reads stdin (heredoc for long text).
 
+## Edit descriptions
+Small change → `edit`, not a full `update -d` rewrite: stale edits fail instead of clobbering others' changes.
+```
+bn edit <id> --old text --new text   # old must occur exactly once; `--old=- x` if text starts with -
+bn edit <id> -                       # JSON array [{old,new}] on stdin; in order, all-or-nothing
+```
+
 ## Specs
 Spec = agreement (title + text), id like `bn-s3`.
 ```

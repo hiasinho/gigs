@@ -107,6 +107,8 @@ async function route(store: Store, req: Request, token: string | undefined): Pro
       return store.reopen(param);
     case "PATCH /boons/:":
       return store.update(param, actor, await readBody(req));
+    case "POST /boons/:/edits":
+      return store.editBoon(param, actor, (await readBody(req)).edits);
     case "POST /boons/:/heartbeat":
       return store.heartbeat(param, actor);
     case "POST /boons/:/defer":

@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { Client, type BoonChangesInput } from "./client";
 import { configFromEnv, serve } from "./server";
-import { BoonsError, formatReasons as reasonText, type Boon, type BoonDetail, type BoonSummary, type LinkKind, type Project, type Spec } from "./store";
+import { BoonsError, formatReasons as reasonText, type Boon, type BoonDetail, type BoonSummary, type LinkKind, type Project, type Spec, type TextEdit } from "./store";
 
 type Options = NonNullable<ParseArgsConfig["options"]>;
 type Values = Record<string, string | boolean | undefined>;
@@ -241,6 +241,18 @@ const COMMANDS: Record<string, Command> = {
     },
   },
 
+  edit: {
+    usage: "edit <id> --old text --new text | edit <id> -",
+    summary: "replace exact text in a boon's description; each old text must occur exactly once (`-` reads a JSON array of {old,new} from stdin)",
+    options: { old: { type: "string" }, new: { type: "string" } },
+    async run({ args, values, json, print, client }) {
+      const id = arg(args, 0, "id");
+      const boon = await client().editBoon(id, await readEdits(args.slice(1), values, "edit"));
+      if (json) return print(boon, row);
+      console.log(`edited ${boon.id}`);
+    },
+  },
+
   claim: {
     usage: "claim [id] [--spec id]",
     summary: "claim the given boon, or the next ready one (--spec: next ready within that spec; not with an id)",
@@ -379,17 +391,7 @@ const COMMANDS: Record<string, Command> = {
       }
       if (action === "edit") {
         const id = arg(args, 1, "id");
-        let edits;
-        if (args[2] === "-" && args.length === 3) {
-          if (values.old !== undefined || values.new !== undefined) throw new Error("use stdin or --old/--new, not both");
-          try { edits = JSON.parse(await Bun.stdin.text()); }
-          catch { throw new Error("stdin must be a JSON array of {old,new}"); }
-        } else {
-          if (args.length > 2) throw new Error("too many arguments (see `bn spec --help`)");
-          if (values.old === undefined || values.new === undefined) throw new Error("pass --old and --new, or - for JSON edits on stdin");
-          edits = [{ old: values.old as string, new: values.new as string }];
-        }
-        const spec = await client().editSpec(id, edits);
+        const spec = await client().editSpec(id, await readEdits(args.slice(2), values, "spec"));
         if (json) return print(spec, specRow);
         return console.log(`edited ${spec.id} (version ${spec.version})`);
       }
@@ -576,6 +578,18 @@ function arg(args: string[], i: number, name: string): string {
 function parsePriority(s: string): number | string {
   const m = /^[pP]?(\d+)$/.exec(s);
   return m ? Number(m[1]) : s;
+}
+
+/** Edits from --old/--new, or (`rest` is just `-`) a JSON array of {old,new} on stdin; the server validates them. */
+async function readEdits(rest: string[], values: Record<string, unknown>, command: string): Promise<TextEdit[]> {
+  if (rest.length === 1 && rest[0] === "-") {
+    if (values.old !== undefined || values.new !== undefined) throw new Error("use stdin or --old/--new, not both");
+    try { return JSON.parse(await Bun.stdin.text()); }
+    catch { throw new Error("stdin must be a JSON array of {old,new}"); }
+  }
+  if (rest.length) throw new Error(`too many arguments (see \`bn ${command} --help\`)`);
+  if (values.old === undefined || values.new === undefined) throw new Error("pass --old and --new, or - for JSON edits on stdin");
+  return [{ old: values.old as string, new: values.new as string }];
 }
 
 /** `-` means: read from stdin. */

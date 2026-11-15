@@ -565,3 +565,28 @@ test("labels through the real CLI: create, label add|rm, update, filters, rows, 
   expect((await bn(["show", a.id, "--human", "--full"], opts)).stdout).toContain("\nlabels:    agent, ready-for-agent\n");
   expect((await bn(["list", "--human"], opts)).stdout).toBe(`${a.id}  P2  open         task     Triage me  [agent, ready-for-agent]\n`);
 });
+
+test("edit through CLI: --old/--new, JSON on stdin, row, human and raw output, errors", async () => {
+  store.createProject("ed");
+  const opts = { env: { BN_PROJECT: "ed" } };
+  const boon = await bnJson(["create", "Map", "-d", "Log:\n- a"], opts);
+  const row = { id: boon.id, title: "Map", type: "task", priority: 2, status: "open" };
+  // Text starting with "-" needs the --old=<text> form (parseArgs would take it for an option).
+  expect(await bnJson(["edit", boon.id, "--old=- a", "--new=- a\n- b"], opts)).toEqual(row);
+  const edits = [{ old: "- b", new: "- b\n- c" }, { old: "Log:", new: "Decisions:" }];
+  expect(await bnJson(["edit", boon.id, "-"], { ...opts, stdin: JSON.stringify(edits) })).toEqual(row);
+  expect((await bnJson(["show", boon.id], opts)).description).toBe("Decisions:\n- a\n- b\n- c");
+  expect(await bnJson(["edit", boon.id, "--old", "b\n- c", "--new", "b\n- d", "--full"], opts)).toMatchObject({ id: boon.id, description: "Decisions:\n- a\n- b\n- d" });
+  expect((await bn(["edit", boon.id, "--old", "\n- d", "--new", "", "--human"], opts)).stdout).toBe(`edited ${boon.id}\n`);
+  const missing = await bn(["edit", boon.id, "--old", "missing", "--new", "x"], opts);
+  expect(missing.code).toBe(1);
+  expect(missing.stderr).toContain("edit 1: old text not found");
+  for (const stdin of ["invalid", "{}", "[]", '[{"old":"- a"}]', '[{"old":"","new":"x"}]']) {
+    expect((await bn(["edit", boon.id, "-"], { ...opts, stdin })).code).toBe(1);
+  }
+  for (const args of [
+    [boon.id, "--old", "a"], [boon.id, "--new", "x"], [boon.id, "-", "--old", "a", "--new", "x"],
+    [boon.id, "extra"], [], ["ed-99", "--old", "a", "--new", "b"],
+  ]) expect((await bn(["edit", ...args], opts)).code).toBe(1);
+  expect((await bnJson(["show", boon.id], opts)).description).toBe("Decisions:\n- a\n- b");
+});

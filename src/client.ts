@@ -1,4 +1,4 @@
-import { BoonsError, type Boon, type BoonDetail, type Comment, type Project, type Reason, type Spec, type SpecEdit, type SpecHistory } from "./store";
+import { BoonsError, type Boon, type BoonDetail, type Comment, type Project, type Reason, type Spec, type TextEdit, type SpecHistory } from "./store";
 
 export interface ClientOptions {
   url: string;
@@ -103,7 +103,7 @@ export class Client {
     return this.request<Spec>("GET", `/specs/${enc(id)}${version === undefined ? "" : `?version=${version}`}`);
   }
 
-  editSpec(id: string, edits: SpecEdit[]) {
+  editSpec(id: string, edits: TextEdit[]) {
     return this.request<Spec>("POST", `/specs/${enc(id)}/edits`, { edits });
   }
 
@@ -149,6 +149,10 @@ export class Client {
 
   update(id: string, changes: BoonChangesInput) {
     return this.request<Boon>("PATCH", `/boons/${enc(id)}`, changes);
+  }
+
+  editBoon(id: string, edits: TextEdit[]) {
+    return this.request<Boon>("POST", `/boons/${enc(id)}/edits`, { edits });
   }
 
   heartbeat(id: string) {

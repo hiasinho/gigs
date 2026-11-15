@@ -46,7 +46,8 @@ export interface Spec {
   created_at: string;
 }
 
-export interface SpecEdit { old: string; new: string }
+/** An exact find/replace on a spec text or boon description. */
+export interface TextEdit { old: string; new: string }
 export interface SpecHistory {
   version: number;
   by: string;
@@ -54,7 +55,7 @@ export interface SpecHistory {
   kind: "create" | "update" | "edit";
   title?: string;
   text?: "replaced";
-  edits?: SpecEdit[];
+  edits?: TextEdit[];
 }
 
 /** Why an unfinished boon is blocked or has a deferred ancestor. */
@@ -411,6 +412,18 @@ export class Store {
     });
   }
 
+  /** Exact find/replace on a boon's description (see applyEdits); read, check and write in one transaction. */
+  editBoon(id: string, actor: string, edits: unknown): Boon {
+    return this.op(() => {
+      actor = checkActor(actor);
+      const boon = this.mustGet(id);
+      const description = applyEdits(boon.description, edits);
+      this.db.query("UPDATE boons SET description = ? WHERE id = ?").run(description, boon.id);
+      this.touch(boon, actor);
+      return this.mustGet(boon.id);
+    });
+  }
+
   addComment(id: string, actor: string, body: unknown): Comment {
     return this.op(() => {
       actor = checkActor(actor);
@@ -567,25 +580,7 @@ export class Store {
     return this.op(() => {
       actor = checkActor(actor);
       const spec = this.mustGetSpec(id);
-      if (!Array.isArray(edits) || !edits.length) throw badRequest("edits must be a non-empty array of {old,new}");
-      let text = spec.text;
-      for (const [i, edit] of edits.entries()) {
-        if (typeof edit !== "object" || edit === null || Array.isArray(edit) ||
-          typeof edit.old !== "string" || !edit.old.length || typeof edit.new !== "string" ||
-          Object.keys(edit).some((key) => key !== "old" && key !== "new")) {
-          throw badRequest(`edit ${i + 1}: expected {old,new} strings with non-empty old`);
-        }
-        let count = 0;
-        let at = text.indexOf(edit.old);
-        const first = at;
-        while (at !== -1) {
-          count++;
-          at = text.indexOf(edit.old, at + 1);
-        }
-        if (!count) throw conflict(`edit ${i + 1}: old text not found`, "edit_conflict");
-        if (count > 1) throw conflict(`edit ${i + 1}: old text found ${count} times; include more context`, "edit_conflict");
-        text = text.slice(0, first) + edit.new + text.slice(first + edit.old.length);
-      }
+      const text = applyEdits(spec.text, edits);
       checkSpecText(text);
       if (text === spec.text) return spec;
       this.db.query("UPDATE specs SET text = ?, version = version + 1 WHERE id = ?").run(text, spec.id);
@@ -1007,6 +1002,32 @@ function checkTitle(v: unknown): string {
   const title = typeof v === "string" ? v.trim() : "";
   if (!title) throw badRequest("title is required");
   return title;
+}
+
+/**
+ * Applies exact find/replace edits in order, all-or-nothing: each `old` must be non-empty and occur
+ * exactly once in the text at its step, so an edit based on a stale read fails instead of clobbering.
+ */
+function applyEdits(text: string, edits: unknown): string {
+  if (!Array.isArray(edits) || !edits.length) throw badRequest("edits must be a non-empty array of {old,new}");
+  for (const [i, edit] of edits.entries()) {
+    if (typeof edit !== "object" || edit === null || Array.isArray(edit) ||
+      typeof edit.old !== "string" || !edit.old.length || typeof edit.new !== "string" ||
+      Object.keys(edit).some((key) => key !== "old" && key !== "new")) {
+      throw badRequest(`edit ${i + 1}: expected {old,new} strings with non-empty old`);
+    }
+    let count = 0;
+    let at = text.indexOf(edit.old);
+    const first = at;
+    while (at !== -1) {
+      count++;
+      at = text.indexOf(edit.old, at + 1);
+    }
+    if (!count) throw conflict(`edit ${i + 1}: old text not found`, "edit_conflict");
+    if (count > 1) throw conflict(`edit ${i + 1}: old text found ${count} times; include more context`, "edit_conflict");
+    text = text.slice(0, first) + edit.new + text.slice(first + edit.old.length);
+  }
+  return text;
 }
 
 function checkDescription(v: unknown): string {

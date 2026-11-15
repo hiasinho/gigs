@@ -83,7 +83,7 @@ test("auth and actor requirements cover all mutation routes, including errors", 
     ["POST", "/projects"], ["POST", "/projects/bn/boons"], ["POST", "/projects/bn/claim"], ["POST", "/projects/bn/specs"],
     ["PATCH", "/boons/bn-1"], ["POST", "/boons/bn-1/links"],
     ["DELETE", "/boons/bn-1/links/related/bn-2"], ["POST", "/missing"],
-    ...["claim", "unclaim", "close", "reopen", "heartbeat", "defer", "undefer", "comments"]
+    ...["claim", "unclaim", "close", "reopen", "heartbeat", "defer", "undefer", "comments", "edits"]
       .map((action): [string, string] => ["POST", "/boons/bn-1/" + action]),
   ];
   for (const [method, path] of routes) {
@@ -231,4 +231,23 @@ test("label routes: set on create, change via PATCH, filter list and ready by qu
   expect(await ids("/projects/lb/boons?exclude_label=wontfix")).toEqual([a.id]);
   expect(await ids("/projects/lb/ready?label=agent&exclude_label=triage:ready")).toEqual([b.id]);
   expect((await call("GET", "/projects/lb/ready?label=Nope")).status).toBe(400);
+});
+
+test("boon edit route: find/replace on the description, validation and conflicts", async () => {
+  store.createProject("be");
+  const boon = store.createBoon("be", "a", { title: "Edit me", description: "one two two" });
+  const path = `/boons/${boon.id.toUpperCase()}/edits`;
+  const edits = [{ old: "one", new: "first" }, { old: "first two two", new: "" }];
+  expect((await call("POST", path, { body: JSON.stringify({ edits }) })).status).toBe(400);
+  expect((await call("POST", path, { actor: "a", token: null, body: JSON.stringify({ edits }) })).status).toBe(401);
+  for (const body of ["{bad", "[]", "{}", '{"edits":[]}', '{"edits":[{"old":"","new":"x"}]}']) {
+    expect((await call("POST", path, { actor: "a", body })).status).toBe(400);
+  }
+  const conflict = await call("POST", path, { actor: "a", body: JSON.stringify({ edits: [{ old: "two", new: "x" }] }) });
+  expect(conflict.status).toBe(409);
+  expect(await conflict.json()).toEqual({ error: { code: "edit_conflict", message: "edit 1: old text found 2 times; include more context" } });
+  const edited = await call("POST", path, { actor: "a", body: JSON.stringify({ edits }) });
+  expect(edited.status).toBe(200);
+  expect(await edited.json()).toMatchObject({ id: boon.id, description: "" });
+  expect((await call("POST", "/boons/be-99/edits", { actor: "a", body: JSON.stringify({ edits }) })).status).toBe(404);
 });

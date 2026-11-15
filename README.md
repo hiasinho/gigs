@@ -155,6 +155,7 @@ bn list [--all] [--status s[,s]] [--type t] [--parent id] [--spec id] [--label l
 bn ready [--spec id] [--label l[,l]] [--exclude-label l[,l]]
 bn blocked [--spec id]            bn show <id> [--full]
 bn update <id> [--title t] [-d desc|-] [-t type] [-p n] [--parent id|none] [--spec id|none] [--add-label l[,l]] [--remove-label l[,l]]
+bn edit <id> --old text --new text   bn edit <id> -   # JSON array [{old,new}] on stdin
 bn dep add|rm <id> <target-id> [--kind blocks|related|discovered-from]   # default: target blocks id
 bn label add|rm <id> <label...>
 bn claim [id] [--spec id]         bn unclaim <id>                        bn heartbeat <id>
@@ -172,13 +173,17 @@ Types: `bug`, `feature`, `task`, `epic`, `chore`. Priority: `0` (critical) to `4
 Output is compact JSON by default (see [For agents](#for-agents)). Use `--human` for human-readable text,
 or `bn show <id> --human --full` for the complete text view.
 `bn help`, `bn <command> --help`, `bn skill`, and the server startup line remain plain text.
+`bn edit` changes a boon's description by exact replacement, with the same rules as `bn spec edit`
+(each `old` non-empty and found exactly once, in order, all-or-nothing); the description may end up
+empty. Prefer it over rewriting with `update -d`: an edit based on a stale read fails instead of
+silently dropping someone else's change. Text starting with `-` needs `--old=<text>`.
 `bn close --force` closes a parent despite unfinished children (they stay open).
 `bn help` and `bn <command> --help` have the details.
 
 ## For agents
 
 - Output defaults to one line of compact JSON with null and empty fields omitted:
-  - `list`, `ready` and mutations (`create`, `update`, `close`, `defer`, `dep add`, ...) print rows:
+  - `list`, `ready` and mutations (`create`, `update`, `edit`, `close`, `defer`, `dep add`, ...) print rows:
     `{id, title, type, priority, status, parent?, spec?, labels?, claimed_by?, claim_expires_at?, defer_until?, close_reason?}`
     (`close` with several ids prints an array); `blocked` adds `reasons: [{kind, id, via?}]`.
   - `show` and `claim` print the boon with `labels?`, `description`, `ready`/`reasons` (open boons only),
