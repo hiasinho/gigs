@@ -61,10 +61,11 @@ gig list|ready|claim --label a,b --exclude-label c      # all of a,b; none of c 
 ## Human gigs
 `human: true` = only a human works it. `gig claim` (no id) never hands it out; it still shows in `ready`.
 Never claim one by id unless a human tells you to.
-Need a human decision? Create a human gig blocking your own, then stop or move on:
+Need a human decision? Create a human gig blocking your own, release your claim, then stop or move on:
 ```
 gig create "<question>" --human-only -d "<context>"   # → gig-50
-gig dep add <your-id> gig-50                           # gig-50 blocks yours; ready again once the human answers and closes it
+gig dep add <your-id> gig-50                           # gig-50 blocks yours
+gig unclaim <your-id>                                  # ready again once the human answers and closes gig-50
 ```
 `gig update <id> --human-only|--no-human-only` · `gig list|ready --human-only` (the human's queue)
 

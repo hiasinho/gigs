@@ -162,11 +162,12 @@ gig claim --parent ws-1 --exclude-label big   # next ready gig anywhere under th
 ```
 
 An agent waiting on a human decision files the question as a human gig that blocks its own gig,
-then stops or moves on. The human answers in a comment and closes it; the agent's gig is ready again.
+releases its claim, then stops or moves on. The human answers in a comment and closes it; the agent's gig is ready again.
 
 ```sh
 gig create "Which payment provider?" --human-only -d "Stripe or Adyen? Context in ws-3."   # ws-5
 gig dep add ws-3 ws-5     # ws-5 blocks ws-3
+gig unclaim ws-3          # without this, ws-3 stays claimed until the claim lapses
 gig ready --human-only    # the human's queue: ws-5
 gig comment ws-5 "Stripe." --as alice && gig close ws-5 --as alice   # ws-3 becomes ready again
 ```
@@ -232,7 +233,7 @@ silently dropping someone else's change. Text starting with `-` needs `--old=<te
 - File work you find but won't do with `--discovered-from <your gig>`.
 - Never claim a human gig (`human: true`) unless a human tells you to. When you need a human
   decision, create a human gig that blocks your own (`--human-only`, then `gig dep add <yours> <new>`),
-  then stop or move on.
+  release yours with `gig unclaim <yours>`, then stop or move on.
 - An agent skill lives at [.agents/skills/gigs](.agents/skills/gigs); `gig skill` prints it, so any agent
   can read it or install it into its own skills directory.
 
