@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { BoonsError, Store, validClaimTtl, type ReadyFilter } from "./store";
+import { BoonsError, Store, validClaimTtl, type ClaimFilter, type LabelFilter } from "./store";
 
 export interface HandlerOptions {
   token?: string;
@@ -65,14 +65,17 @@ async function route(store: Store, req: Request, token: string | undefined): Pro
         type: q.get("type") ?? undefined,
         parent: q.get("parent") ?? undefined,
         spec: q.get("spec") ?? undefined,
-        ...readyFilter(q),
+        ...labelFilter(q),
+        human: humanQuery(q),
         all: q.get("all") === "1" || q.get("all") === "true",
       });
     }
     case "POST /projects/:/boons":
       return json(store.createBoon(param, actor, await readBody(req)), 201);
-    case "GET /projects/:/ready":
-      return store.ready(param, url.searchParams.get("spec") ?? undefined, readyFilter(url.searchParams));
+    case "GET /projects/:/ready": {
+      const q = url.searchParams;
+      return store.ready(param, q.get("spec") ?? undefined, { ...labelFilter(q), parent: q.get("parent") ?? undefined, human: humanQuery(q) });
+    }
     case "GET /projects/:/blocked":
       return store.blocked(param, url.searchParams.get("spec") ?? undefined);
     case "POST /projects/:/specs":
@@ -91,8 +94,11 @@ async function route(store: Store, req: Request, token: string | undefined): Pro
       const body = await readBody(req);
       return store.addLink(param, body.target, body.kind, actor);
     }
-    case "POST /projects/:/claim":
-      return store.claimNext(param, actor, (await readBody(req)).spec ?? undefined);
+    case "POST /projects/:/claim": {
+      // Same filters as ready, as JSON (label lists as arrays); there is no human filter: claim-next never hands out human boons.
+      const { spec, label, exclude_label, parent } = await readBody(req);
+      return store.claimNext(param, actor, spec ?? undefined, { label, exclude_label, parent: parent ?? undefined } as ClaimFilter);
+    }
     case "GET /boons/:":
       return store.getDetail(param);
     case "POST /boons/:/claim":
@@ -121,10 +127,15 @@ async function route(store: Store, req: Request, token: string | undefined): Pro
   throw new BoonsError("not_found", `no route for ${req.method} ${url.pathname}`, 404);
 }
 
-/** `?label=a,b&exclude_label=c&human=1` as a filter. */
-function readyFilter(q: URLSearchParams): ReadyFilter {
+/** `?label=a,b&exclude_label=c` as a filter. */
+function labelFilter(q: URLSearchParams): LabelFilter {
   const list = (name: string) => q.get(name)?.split(",").map((s) => s.trim()).filter(Boolean);
-  return { label: list("label"), exclude_label: list("exclude_label"), human: q.get("human") === "1" || q.get("human") === "true" };
+  return { label: list("label"), exclude_label: list("exclude_label") };
+}
+
+/** `?human=1` or `?human=true`: only human boons. */
+function humanQuery(q: URLSearchParams): boolean {
+  return q.get("human") === "1" || q.get("human") === "true";
 }
 
 async function readBody(req: Request): Promise<Record<string, unknown>> {

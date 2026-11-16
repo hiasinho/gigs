@@ -404,7 +404,8 @@ test("errors, help and connection failures", async () => {
   expect(help.stdout).toContain("bn defer <id> [--until");
   expect(help.stdout.split("\n").every((line) => line.length <= 80)).toBe(true);
   expect((await bn(["help"])).stdout).toBe(help.stdout);
-  expect(help.stdout).toContain("  bn ready [--spec id] [--label l[,l]] [--exclude-label l[,l]] [--human-only]\n    ready boons in priority order (--human-only: only human boons, the human's\n    queue)\n");
+  expect(help.stdout).toContain("  bn ready [--spec id] [--parent id] [--label l[,l]] [--exclude-label l[,l]]\n    [--human-only]\n    ready boons in priority order (--parent: the whole subtree, i.e. all\n    descendants, not the boon itself; --human-only: only human boons, the\n    human's queue)\n");
+  expect(help.stdout).toContain("--parent: direct children only");
   expect((await bn(["show", "--help"])).stdout).toBe("usage: bn show <id> [--full]\n\nshow a compact boon (--full shows everything)\n");
   const createHelp = await bn(["create", "--help"]);
   expect(createHelp.code).toBe(0);
@@ -596,6 +597,38 @@ test("human boons through the real CLI: --human-only on create, list, ready; upd
   // --no-human-only is only for update; --human-only takes no value.
   expect((await bn(["create", "x", "--no-human-only"], opts)).code).toBe(1);
   expect((await bn(["update", mine.id, "--human-only=yes"], opts)).code).toBe(1);
+});
+
+test("claim-next filters and ready --parent through the real CLI", async () => {
+  store.createProject("cx");
+  const opts = { env: { BN_PROJECT: "cx" } };
+  const id = async (args: string[]) => (await bnJson(args, opts)).id as string;
+  const ids = async (args: string[]) => (await bnJson(args, opts)).map((x: any) => x.id);
+  const epic = await id(["create", "Epic", "-t", "epic"]);
+  const child = await id(["create", "Child", "--parent", epic]);
+  const grand = await id(["create", "Grandchild", "--parent", child, "--label", "ready-for-agent", "-p", "3"]);
+  const ask = await id(["create", "Ask", "--parent", child, "--label", "ready-for-agent", "--human-only", "-p", "0"]);
+  const big = await id(["create", "Big", "--parent", epic, "--label", "ready-for-agent,big", "-p", "1"]);
+  const outside = await id(["create", "Outside", "--label", "ready-for-agent", "-p", "0"]);
+  // list --parent: direct children; ready --parent: the whole subtree, not the parent.
+  expect(await ids(["list", "--parent", epic])).toEqual([big, child]);
+  expect(await ids(["ready", "--parent", epic])).toEqual([ask, big, grand]);
+  expect(await ids(["ready", "--parent", epic, "--exclude-label", "big"])).toEqual([ask, grand]);
+  expect((await bn(["ready", "--parent", "cx-99"], opts)).stderr).toContain("boon cx-99 not found");
+  expect((await bn(["claim", "--parent", "cx-99"], opts)).stderr).toContain("boon cx-99 not found");
+  // Filters only make sense without an id; --human-only is not a claim option.
+  expect((await bn(["claim", grand, "--label", "x"], opts)).stderr).toBe("error: --label only works with `bn claim` without an id\n");
+  expect((await bn(["claim", grand, "--parent", epic, "--spec", "cx-s1"], opts)).stderr).toBe("error: --spec, --parent only work with `bn claim` without an id\n");
+  expect((await bn(["claim", "--human-only"], opts)).stderr).toContain("bn claim --help");
+  expect(await bnJson(["claim", "--parent", epic, "--label", "ready-for-agent", "--exclude-label", "big"], opts)).toMatchObject({ id: grand, claimed_by: "agent-1" });
+  expect(await bnJson(["claim", "--parent", epic, "--exclude-label", "big"], opts)).toBeNull();
+  expect((await bn(["claim", "--parent", epic, "--human"], opts)).stdout).toBe(`claimed ${big}: Big\n`);
+  expect(await bnJson(["claim", "--label", "ready-for-agent"], opts)).toMatchObject({ id: outside });
+  expect(await bnJson(["claim", "--label", "ready-for-agent"], opts)).toBeNull();
+  expect(await bnJson(["show", ask], opts)).toMatchObject({ status: "open", human: true });
+  const help = (await bn(["claim", "--help"], opts)).stdout;
+  expect(help).toContain("[--parent id]");
+  expect(help).toContain("--parent: the whole subtree");
 });
 
 test("edit through CLI: --old/--new, JSON on stdin, row, human and raw output, errors", async () => {

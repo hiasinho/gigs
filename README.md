@@ -92,7 +92,9 @@ See [GLOSSARY.md](GLOSSARY.md) for the exact vocabulary.
 - **Status** is `open`, `in_progress` (claimed), `deferred`, or `closed`.
 - **Blockers**: "A blocks B" means B can't be ready until A is closed.
 - **Parent**: a boon has at most one. Unfinished children block their parent; a parent's blockers
-  also block all its descendants.
+  also block all its descendants. `--parent <id>` means two things: on `list`, the direct children
+  only; on `ready` and `claim`, the whole subtree (children, grandchildren, ...), never the boon
+  itself, with readiness unchanged (a blocker outside the subtree still blocks).
 - **Ready** = open and not blocked and not under a deferred ancestor. **Blocked** is derived,
   never set by hand; `bn blocked` shows why.
 - **Claims** are exclusive and lapse after `BOONS_CLAIM_TTL_MINUTES` without activity by the
@@ -101,10 +103,10 @@ See [GLOSSARY.md](GLOSSARY.md) for the exact vocabulary.
 - **Deferred** boons are never ready until `bn undefer`, or until their `--until` time passes.
 - **Labels** are free-form markers such as `wontfix` or `triage:needs-info`: lowercase letters,
   digits, `.`, `_`, `:` and `-`, starting with a letter or digit, up to 50 characters. They are inert:
-  they never change ready, blocked or claiming, but `list` and `ready` can filter by them
+  they never change ready, blocked or claiming, but `list`, `ready` and `claim` (no id) can filter by them
   (`--label a,b`: all present; `--exclude-label a,b`: none present). Adding a present label or
   removing a missing one is a no-op; labels work on boons of any status, closed included.
-- **Human boons** are worked only by a human. `bn claim` without an id (also with `--spec`) never
+- **Human boons** are worked only by a human. `bn claim` without an id (whatever its filters) never
   hands one out and picks the next ready non-human boon instead. Otherwise they are like any boon:
   they show in `ready`, anyone may claim one by id, they block and are blocked, and claims lapse.
   Set with `bn create --human-only`, change with `bn update --human-only` / `--no-human-only` (any
@@ -151,6 +153,14 @@ bn close ws-2 -r "API spec in docs/payments.md"
 bn ready                 # ws-4, then ws-3
 ```
 
+`bn claim` without an id takes the same filters as `bn ready` (`--spec`, `--parent`, `--label`,
+`--exclude-label`; all must match) and claims the first boon `ready` would list, skipping human boons:
+
+```sh
+bn claim --label ready-for-agent             # only boons someone marked as fit for an agent
+bn claim --parent ws-1 --exclude-label big   # next ready boon anywhere under the epic ws-1
+```
+
 An agent waiting on a human decision files the question as a human boon that blocks its own boon,
 then stops or moves on. The human answers in a comment and closes it; the agent's boon is ready again.
 
@@ -166,14 +176,15 @@ bn comment ws-5 "Stripe." --as alice && bn close ws-5 --as alice   # ws-3 become
 ```
 bn serve                          bn init <prefix> [--name <name>]       bn projects
 bn create <title> [-t type] [-p 0-4] [-d desc|-] [--parent id] [--blocked-by id[,id]] [--discovered-from id] [--spec id] [--label l[,l]] [--human-only]
-bn list [--all] [--status s[,s]] [--type t] [--parent id] [--spec id] [--label l[,l]] [--exclude-label l[,l]] [--human-only]
-bn ready [--spec id] [--label l[,l]] [--exclude-label l[,l]] [--human-only]
+bn list [--all] [--status s[,s]] [--type t] [--parent id] [--spec id] [--label l[,l]] [--exclude-label l[,l]] [--human-only]   # --parent: direct children
+bn ready [--spec id] [--parent id] [--label l[,l]] [--exclude-label l[,l]] [--human-only]   # --parent: whole subtree
 bn blocked [--spec id]            bn show <id> [--full]
 bn update <id> [--title t] [-d desc|-] [-t type] [-p n] [--parent id|none] [--spec id|none] [--add-label l[,l]] [--remove-label l[,l]] [--human-only|--no-human-only]
 bn edit <id> --old text --new text   bn edit <id> -   # JSON array [{old,new}] on stdin
 bn dep add|rm <id> <target-id> [--kind blocks|related|discovered-from]   # default: target blocks id
 bn label add|rm <id> <label...>
-bn claim [id] [--spec id]         bn unclaim <id>                        bn heartbeat <id>
+bn claim [id]                     bn unclaim <id>                        bn heartbeat <id>
+bn claim [--spec id] [--parent id] [--label l[,l]] [--exclude-label l[,l]]   # next ready non-human boon, filtered like ready
 bn close <id...> [-r reason] [--force]                                   bn reopen <id>
 bn defer <id> [--until <ISO time|YYYY-MM-DD|30m|4h|2d>]                  bn undefer <id>
 bn comment <id> <text|->                                                 bn skill
@@ -216,6 +227,8 @@ silently dropping someone else's change. Text starting with `-` needs `--old=<te
   since claims are per actor and shells do not persist exports between calls.
 - Long tasks: run `bn heartbeat <id>` (or comment) more often than the claim TTL, or the claim
   lapses and someone else may pick the boon up.
+- Narrow what you pick up with `bn claim --label ready-for-agent` or `bn claim --parent <epic>`
+  (the whole subtree under it); a filter that matches nothing prints `null`.
 - File work you find but won't do with `--discovered-from <your boon>`.
 - Never claim a human boon (`human: true`) unless a human tells you to. When you need a human
   decision, create a human boon that blocks your own (`--human-only`, then `bn dep add <yours> <new>`),

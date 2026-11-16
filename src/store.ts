@@ -133,15 +133,23 @@ export interface LabelFilter {
   exclude_label?: string[];
 }
 
-/** A label filter; with `human`, only human boons. */
-export interface ReadyFilter extends LabelFilter {
+/** A label filter; with `parent`, only that boon's descendants: the whole subtree, not the boon itself. */
+export interface ClaimFilter extends LabelFilter {
+  parent?: string;
+}
+
+/** A claim filter; with `human`, only human boons. */
+export interface ReadyFilter extends ClaimFilter {
   human?: boolean;
 }
 
-export interface ListFilter extends ReadyFilter {
+export interface ListFilter extends LabelFilter {
+  /** Only human boons. */
+  human?: boolean;
   status?: string[];
   type?: string;
   all?: boolean;
+  /** Direct children of this boon only (unlike ReadyFilter's whole subtree). */
   parent?: string;
   spec?: string;
 }
@@ -479,7 +487,7 @@ export class Store {
         where.push("spec = ?");
         params.push(this.specReference(filter.spec, p.prefix));
       }
-      readyFilterClauses(filter, where, params);
+      humanFilterClauses(filter, where, params);
       return this.boons(`SELECT ${BOON_COLUMNS} FROM boons WHERE ${where.join(" AND ")} ORDER BY priority, number`, ...params);
     });
   }
@@ -634,11 +642,15 @@ export class Store {
     });
   }
 
-  /** Claims the first ready boon of the project (within `spec`, if given) that is not a human boon, or returns null if there is none. */
-  claimNext(project: string, actor: string, spec?: unknown): Boon | null {
+  /**
+   * Claims the first ready boon of the project (within `spec` and matching `filter`, if given, in `ready` order)
+   * that is not a human boon, or returns null if there is none. Human boons are skipped whatever the filter.
+   */
+  claimNext(project: string, actor: string, spec?: unknown, filter: ClaimFilter = {}): Boon | null {
     return this.op(() => {
       actor = checkActor(actor);
-      const next = this.readyBoons(this.mustGetProject(project).prefix, spec).find((boon) => !boon.human);
+      const { label, exclude_label, parent } = filter;
+      const next = this.readyBoons(this.mustGetProject(project).prefix, spec, { label, exclude_label, parent }).find((boon) => !boon.human);
       return next ? this.claimBoon(next.id, actor) : null;
     });
   }
@@ -913,12 +925,18 @@ export class Store {
   /** Boons of the project in pickup order; with `spec`, only those pointing to it; with `filter`, only those matching. */
   private orderedBoons(prefix: string, spec?: unknown, filter: ReadyFilter = {}): Boon[] {
     const where = ["project = ?"];
-    const params: string[] = [prefix];
+    const params: (string | number)[] = [prefix];
     if (spec !== undefined) {
       where.push("spec = ?");
       params.push(this.specReference(spec, prefix));
     }
-    readyFilterClauses(filter, where, params);
+    if (filter.parent !== undefined) {
+      // Every descendant (children, grandchildren, ...), not the parent itself; parent cycles are rejected on write.
+      where.push(`id IN (WITH RECURSIVE subtree(id) AS (SELECT id FROM boons WHERE parent = ?
+        UNION SELECT boons.id FROM boons JOIN subtree ON boons.parent = subtree.id) SELECT id FROM subtree)`);
+      params.push(this.reference(filter.parent));
+    }
+    humanFilterClauses(filter, where, params);
     return this.boons(`SELECT ${BOON_COLUMNS} FROM boons WHERE ${where.join(" AND ")} ${READY_ORDER}`, ...params);
   }
 
@@ -1003,7 +1021,7 @@ function labelClauses(filter: LabelFilter, where: string[], params: (string | nu
 }
 
 /** Appends SQL conditions for labels and, with `human`, only human boons. */
-function readyFilterClauses(filter: ReadyFilter, where: string[], params: (string | number)[]) {
+function humanFilterClauses(filter: LabelFilter & { human?: unknown }, where: string[], params: (string | number)[]) {
   labelClauses(filter, where, params);
   if (filter.human !== undefined && typeof filter.human !== "boolean") throw badRequest("human must be a boolean");
   if (filter.human) where.push("human = 1");

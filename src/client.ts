@@ -31,17 +31,28 @@ export interface BoonChangesInput {
   human?: boolean;
 }
 
-/** Comma-separated; all of `label` and none of `exclude_label` must be present. `human`: only human boons. */
-export interface ReadyQuery {
+/** Comma-separated; all of `label` and none of `exclude_label` must be present. */
+export interface LabelQuery {
   label?: string;
   exclude_label?: string;
+}
+
+/** A label query; `parent`: only that boon's descendants, the whole subtree (not the boon itself). */
+export interface ClaimQuery extends LabelQuery {
+  parent?: string;
+}
+
+/** A claim query; `human`: only human boons. */
+export interface ReadyQuery extends ClaimQuery {
   human?: boolean;
 }
 
-export interface ListQuery extends ReadyQuery {
+export interface ListQuery extends LabelQuery {
+  human?: boolean;
   status?: string;
   type?: string;
   all?: boolean;
+  /** Direct children only. */
   parent?: string;
   spec?: string;
 }
@@ -88,6 +99,7 @@ export class Client {
     if (spec !== undefined) q.set("spec", spec);
     if (filter.label) q.set("label", filter.label);
     if (filter.exclude_label) q.set("exclude_label", filter.exclude_label);
+    if (filter.parent !== undefined) q.set("parent", filter.parent);
     if (filter.human) q.set("human", "1");
     return this.request<Boon[]>("GET", `/projects/${enc(project)}/ready${q.size ? `?${q}` : ""}`);
   }
@@ -128,8 +140,11 @@ export class Client {
     return this.request<BoonDetail>("DELETE", `/boons/${enc(id)}/links/${enc(kind)}/${enc(target)}`);
   }
 
-  claimNext(project: string, spec?: string) {
-    return this.request<Boon | null>("POST", `/projects/${enc(project)}/claim`, spec === undefined ? undefined : { spec });
+  /** Claims the next ready non-human boon matching the filters; label lists go to the server as arrays. */
+  claimNext(project: string, spec?: string, filter: ClaimQuery = {}) {
+    const body = { spec, label: list(filter.label), exclude_label: list(filter.exclude_label), parent: filter.parent };
+    const empty = Object.values(body).every((v) => v === undefined);
+    return this.request<Boon | null>("POST", `/projects/${enc(project)}/claim`, empty ? undefined : body);
   }
 
   getBoon(id: string) {
@@ -204,4 +219,5 @@ export class Client {
 }
 
 const enc = encodeURIComponent;
+const list = (value?: string) => value?.split(",").map((s) => s.trim()).filter(Boolean);
 const specQuery = (spec?: string) => (spec === undefined ? "" : `?spec=${enc(spec)}`);

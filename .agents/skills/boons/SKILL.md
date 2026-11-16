@@ -13,10 +13,12 @@ Output: JSON, empty fields omitted; `--full` = all fields. Syntax: `bn help`, `b
 ```
 bn ready                  # claimable now
 bn claim [id]             # no id = next ready; returns boon (description, relations, comments) or null
+bn claim --label ready-for-agent --parent <epic>   # no id: same filters as ready (--spec/--label/--exclude-label/--parent)
 # work
 bn comment <id> "<text>"   # as you go: survives compaction, lets others resume
 bn close <id> [-r "<reason>"]
 ```
+`--parent <id>` on `ready`/`claim` = whole subtree (not the boon itself); on `list` = direct children only.
 `bn unclaim <id>` releases a claim.
 Claim lapses after ~60 min without your activity; comment/update/link renews; long work: `bn heartbeat <id>`.
 Lost track (compaction/new session): `bn list --status in_progress`, yours by `claimed_by`, then `bn show <id>`.
@@ -53,7 +55,7 @@ Free-form markers (lowercase, no spaces; `a-z0-9._:-`), e.g. `wontfix`, `triage:
 bn label add|rm <id> <label...>                        # no-op if already present/missing; any status
 bn update <id> --add-label a --remove-label b          # swap in one call
 bn create "<title>" --label a,b
-bn list|ready --label a,b --exclude-label c            # all of a,b; none of c
+bn list|ready|claim --label a,b --exclude-label c      # all of a,b; none of c (claim: no id)
 ```
 
 ## Human boons

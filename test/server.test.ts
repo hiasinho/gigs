@@ -270,3 +270,29 @@ test("boon edit route: find/replace on the description, validation and conflicts
   expect(await edited.json()).toMatchObject({ id: boon.id, description: "" });
   expect((await call("POST", "/boons/be-99/edits", { actor: "a", body: JSON.stringify({ edits }) })).status).toBe(404);
 });
+
+test("claim-next and ready filters: labels, exclude labels, parent subtree; claim never hands out human boons", async () => {
+  store.createProject("cf");
+  const post = (path: string, body?: unknown) => call("POST", path, { actor: "a", body: body === undefined ? undefined : JSON.stringify(body) });
+  const create = async (body: Record<string, unknown>) => ((await (await post("/projects/cf/boons", body)).json()) as any).id as string;
+  const epic = await create({ title: "epic" });
+  const child = await create({ title: "child", parent: epic });
+  const grand = await create({ title: "grandchild", parent: child, labels: ["agent"], priority: 1 });
+  const ask = await create({ title: "ask", parent: child, labels: ["agent"], human: true, priority: 0 });
+  const hold = await create({ title: "on hold", parent: epic, labels: ["agent", "hold"], priority: 0 });
+  const outside = await create({ title: "outside", labels: ["agent"], priority: 0 });
+  const ids = async (path: string) => ((await (await call("GET", path)).json()) as any[]).map((x) => x.id);
+  expect(await ids(`/projects/cf/ready?parent=${epic}`)).toEqual([ask, hold, grand]);
+  expect(await ids(`/projects/cf/ready?parent=${epic}&exclude_label=hold&label=agent`)).toEqual([ask, grand]);
+  expect(await ids(`/projects/cf/boons?parent=${epic}`)).toEqual([hold, child]);
+  expect((await call("GET", "/projects/cf/ready?parent=cf-99")).status).toBe(404);
+  expect((await post("/projects/cf/claim", { parent: "cf-99" })).status).toBe(404);
+  expect((await post("/projects/cf/claim", { label: "agent" })).status).toBe(400);
+  expect((await post("/projects/cf/claim", { label: ["Bad"] })).status).toBe(400);
+  // human: true is not a claim filter; human boons are skipped regardless.
+  expect(await (await post("/projects/cf/claim", { parent: epic, label: ["agent"], exclude_label: ["hold"], human: true })).json()).toMatchObject({ id: grand, claimed_by: "a" });
+  expect(await (await post("/projects/cf/claim", { parent: epic, exclude_label: ["hold"] })).json()).toBeNull();
+  expect(await (await post("/projects/cf/claim", { label: ["agent"] })).json()).toMatchObject({ id: hold });
+  expect(await (await post("/projects/cf/claim", { label: ["agent"], parent: null })).json()).toMatchObject({ id: outside });
+  expect(await (await post("/projects/cf/claim")).json()).toBeNull();
+});

@@ -18,7 +18,8 @@ const GLOBAL_OPTIONS = {
   help: { type: "boolean", short: "h" },
 } satisfies Options;
 
-const FILTER_OPTIONS = { label: { type: "string" }, "exclude-label": { type: "string" }, "human-only": { type: "boolean" } } satisfies Options;
+const LABEL_OPTIONS = { label: { type: "string" }, "exclude-label": { type: "string" } } satisfies Options;
+const FILTER_OPTIONS = { ...LABEL_OPTIONS, "human-only": { type: "boolean" } } satisfies Options;
 
 interface Ctx {
   args: string[];
@@ -125,7 +126,7 @@ const COMMANDS: Record<string, Command> = {
 
   list: {
     usage: "list [--all] [--status s[,s]] [--type t] [--parent id] [--spec id] [--label l[,l]] [--exclude-label l[,l]] [--human-only]",
-    summary: "list boons (default: unfinished; --label: has all of them, --exclude-label: has none of them; --human-only: only human boons)",
+    summary: "list boons (default: unfinished; --parent: direct children only; --label: has all of them, --exclude-label: has none of them; --human-only: only human boons)",
     options: {
       all: { type: "boolean" },
       status: { type: "string" },
@@ -149,11 +150,11 @@ const COMMANDS: Record<string, Command> = {
   },
 
   ready: {
-    usage: "ready [--spec id] [--label l[,l]] [--exclude-label l[,l]] [--human-only]",
-    summary: "ready boons in priority order (--human-only: only human boons, the human's queue)",
-    options: { spec: { type: "string" }, ...FILTER_OPTIONS },
+    usage: "ready [--spec id] [--parent id] [--label l[,l]] [--exclude-label l[,l]] [--human-only]",
+    summary: "ready boons in priority order (--parent: the whole subtree, i.e. all descendants, not the boon itself; --human-only: only human boons, the human's queue)",
+    options: { spec: { type: "string" }, parent: { type: "string" }, ...FILTER_OPTIONS },
     async run({ values, json, print, client, project }) {
-      const boons = await client().ready(project(), values.spec as string | undefined, filterQuery(values));
+      const boons = await client().ready(project(), values.spec as string | undefined, { ...filterQuery(values), parent: values.parent as string | undefined });
       if (json) return print(boons, (list) => list.map(row));
       console.log(boons.length ? rows(boons) : "no ready boons");
     },
@@ -261,13 +262,20 @@ const COMMANDS: Record<string, Command> = {
   },
 
   claim: {
-    usage: "claim [id] [--spec id]",
-    summary: "claim the given boon, or the next ready one that is not a human boon (--spec: next ready within that spec; not with an id)",
-    options: { spec: { type: "string" } },
+    usage: "claim [id] | claim [--spec id] [--parent id] [--label l[,l]] [--exclude-label l[,l]]",
+    summary: "claim the given boon, or the first boon of `bn ready` with the same filters that is not a human boon (--parent: the whole subtree; filters only without an id)",
+    options: { spec: { type: "string" }, parent: { type: "string" }, ...LABEL_OPTIONS },
     async run({ args, values, json, full, print, client, project }) {
-      if (args[0] && values.spec !== undefined) throw new Error("--spec only works with `bn claim` without an id");
+      const filters = ["spec", "parent", "label", "exclude-label"].filter((f) => values[f] !== undefined);
+      if (args[0] && filters.length) {
+        throw new Error(`${filters.map((f) => `--${f}`).join(", ")} only work${filters.length === 1 ? "s" : ""} with \`bn claim\` without an id`);
+      }
       const c = client();
-      const boon = args[0] ? await c.claim(args[0]) : await c.claimNext(project(), values.spec as string | undefined);
+      const boon = args[0] ? await c.claim(args[0]) : await c.claimNext(project(), values.spec as string | undefined, {
+        label: values.label as string | undefined,
+        exclude_label: values["exclude-label"] as string | undefined,
+        parent: values.parent as string | undefined,
+      });
       if (json) return print(boon && !full ? compactShow(await c.getBoon(boon.id)) : boon);
       console.log(boon ? `claimed ${boon.id}: ${boon.title}` : "no ready boons");
     },
