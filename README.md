@@ -76,6 +76,22 @@ journalctl --user -u gigs -f
 
 Add `Environment=GIGS_ADMIN_TOKEN=...` (etc.) under `[Service]` to configure it.
 
+### On Cloudflare (Workers + Durable Objects)
+
+A second, always-on target (`wrangler.toml`, `src/worker.ts`): the Worker forwards every request to
+one SQLite-backed Durable Object that holds the whole database and serves the same API. Auth is
+always on there; requests are refused (503) until the `GIGS_ADMIN_TOKEN` secret is set.
+`GIGS_CLAIM_TTL_MINUTES` is a var in `wrangler.toml`. Hosted at `https://gigs.strapivo.dev`.
+
+```sh
+bunx wrangler deploy                          # with a wrangler login
+bunx wrangler secret put GIGS_ADMIN_TOKEN
+bun scripts/deploy.ts [--secret]              # without one: the same through the Cloudflare API via Composio
+```
+
+`scripts/deploy.ts` deploys the committed `HEAD` and, with `--secret`, sets the admin token from
+`~/.config/gigs/admin-token`.
+
 ## Installing `gig`
 
 From a checkout, after `bun install`, either run `bun link` (uses the `bin` entry in
@@ -316,4 +332,7 @@ bun run check    # tsc --noEmit && bun test && bun run test:do
 The store talks SQL through a small synchronous interface ([src/sql.ts](src/sql.ts)) with two adapters:
 bun:sqlite ([src/sql-bun.ts](src/sql-bun.ts), the server's) and a Durable Object's SQLite storage
 ([src/sql-do.ts](src/sql-do.ts)). `bun run test:do` runs the store-level tests inside workerd against a real
-Durable Object (vitest with `@cloudflare/vitest-plugin`; tests open databases through `test/harness.ts`).
+Durable Object (vitest with `@cloudflare/vitest-plugin`; tests open databases through `test/harness.ts`),
+plus the Worker entry end to end (`test/do/worker-entry.ts`). The HTTP handler ([src/handler.ts](src/handler.ts))
+is runtime-neutral; [src/server.ts](src/server.ts) (Bun, the only importer of sql-bun) and
+[src/worker.ts](src/worker.ts) (Cloudflare) are its two entries.

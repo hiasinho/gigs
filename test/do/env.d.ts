@@ -1,11 +1,7 @@
-// Just enough of the workerd test modules' types for tsc, which checks this repo with Bun's types.
-declare module "cloudflare:workers" {
-  export abstract class DurableObject {
-    constructor(ctx: unknown, env: unknown);
-  }
-}
+// Just enough of the workerd test module's types for tsc (cloudflare:workers is in src/workerd.d.ts).
 declare module "cloudflare:test" {
   export const env: unknown;
+  export const SELF: { fetch(input: string | Request, init?: RequestInit): Promise<Response> };
   export function runInDurableObject<R>(stub: unknown, fn: (instance: unknown, state: { storage: unknown }) => R | Promise<R>): Promise<R>;
 }
 interface DurableObjectNamespace {

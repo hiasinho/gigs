@@ -1,0 +1,23 @@
+# Gigs on Cloudflare Workers + one SQLite-backed Durable Object (see src/worker.ts).
+# Deploy: `bunx wrangler deploy` (needs a wrangler login), or scripts/deploy.sh (Cloudflare API).
+# The admin token is a secret: `bunx wrangler secret put GIGS_ADMIN_TOKEN`.
+name = "gigs"
+main = "src/worker.ts"
+compatibility_date = "2026-11-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+routes = [{ pattern = "gigs.strapivo.dev", custom_domain = true }]
+
+# ui.html is bundled as a string.
+rules = [{ type = "Text", globs = ["**/*.html"], fallthrough = false }]
+
+[vars]
+GIGS_CLAIM_TTL_MINUTES = "60"
+
+[[durable_objects.bindings]]
+name = "GIGS"
+class_name = "GigsDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["GigsDO"]
