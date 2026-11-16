@@ -98,6 +98,13 @@ returns `{version, tables: {<table>: [rows]}}` (schema version, every row as sto
 and claims. Import refuses (409) unless the target has no rows and the same schema version; it
 answers `{version, tables: {<table>: <rows imported>}}`.
 
+**This setup runs on the hosted server.** Since gig-14 the whole database lives at
+`https://gigs.strapivo.dev`; the local service is stopped and disabled (its unit file and
+`~/.local/share/gigs/gigs.db` are kept as a fallback). The launcher (below) defaults `GIGS_URL` to the
+hosted server, and each repo's `.gigs.json` carries its project token. To fall back to local:
+`systemctl --user start gigs` and run `gig` with `GIGS_URL=http://127.0.0.1:7357` (the local
+database is as of the cutover; move newer data back with export/import).
+
 ## Installing `gig`
 
 From a checkout, after `bun install`, either run `bun link` (uses the `bin` entry in
@@ -110,6 +117,8 @@ exec bun "$HOME/src/gigs/src/cli.ts" "$@"
 
 If you manage Bun with mise, pin the version in the launcher instead:
 `exec "$HOME/.local/bin/mise" exec bun@1.4 -- bun "$HOME/src/gigs/src/cli.ts" "$@"`.
+To talk to a hosted server by default, add `export GIGS_URL="${GIGS_URL:-https://gigs.strapivo.dev}"`
+before the `exec` line (an explicit `GIGS_URL` still wins).
 Don't add `-C <checkout>`: `gig` must run in the caller's directory to find its `.gigs.json`.
 
 Client environment:
