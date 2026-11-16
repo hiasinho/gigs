@@ -5,9 +5,9 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { GigsError, Store } from "../src/store";
 
-/** Removes migrations 7, 6, 5 and 4, leaving a v3 database. */
+/** Removes migrations 8, 7, 6, 5 and 4, leaving a v3 database. */
 const DROP_MIGRATION_4 =
-  "ALTER TABLE gigs DROP COLUMN human; DROP TABLE labels; DROP TABLE spec_versions; ALTER TABLE specs DROP COLUMN version; DROP INDEX gigs_spec; ALTER TABLE gigs DROP COLUMN spec; ALTER TABLE projects DROP COLUMN next_spec_number; DROP TABLE specs;";
+  "ALTER TABLE specs DROP COLUMN state; ALTER TABLE specs DROP COLUMN close_reason; ALTER TABLE specs DROP COLUMN closed_by; ALTER TABLE specs DROP COLUMN closed_at; ALTER TABLE gigs DROP COLUMN human; DROP TABLE labels; DROP TABLE spec_versions; ALTER TABLE specs DROP COLUMN version; DROP INDEX gigs_spec; ALTER TABLE gigs DROP COLUMN spec; ALTER TABLE projects DROP COLUMN next_spec_number; DROP TABLE specs;";
 
 let dir: string;
 let store: Store;
@@ -250,20 +250,22 @@ describe("migrations", () => {
     expect(again.getGig("gig-1").title).toBe("x");
     again.dispose();
     const db = new Database(join(dir, "gigs.db"));
-    expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 7 });
+    expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
     db.close();
   });
 });
 
 describe("specs", () => {
   const spec = (title = "Agreement", project = "gig") => store.createSpec(project, "alice", { title, text: "We agree." });
+  /** Gigs may only point at a ready (or active) spec. */
+  const readySpec = (title = "Agreement", project = "gig") => store.readySpec(spec(title, project).id, "alice");
 
   test("numbered per project with their own counter, case-insensitive ids, listed by number", () => {
     store.createProject("xy");
     store.createGig("gig", "a", { title: "gig" });
     const [a, b, c] = [spec("  First  "), spec("Second"), spec("Other", "xy")];
     expect([a.id, b.id, c.id]).toEqual(["gig-s1", "gig-s2", "xy-s1"]);
-    expect(a).toEqual({ id: "gig-s1", project: "gig", title: "First", text: "We agree.", version: 1, created_by: "alice", created_at: clock.toISOString() });
+    expect(a).toEqual({ id: "gig-s1", project: "gig", title: "First", text: "We agree.", version: 1, state: "draft", status: "draft", close_reason: null, closed_by: null, closed_at: null, created_by: "alice", created_at: clock.toISOString() });
     expect(store.getSpec(" GIG-S2 ")).toEqual(b);
     expect(store.listSpecs("GIG").map((s) => s.id)).toEqual(["gig-s1", "gig-s2"]);
     expect(store.createGig("gig", "a", { title: "next" }).id).toBe("gig-2");
@@ -276,11 +278,11 @@ describe("specs", () => {
       expectError(() => store.createSpec("gig", "a", input), "bad_request", 400);
     }
     expectError(() => store.createSpec("gig", " ", { title: "t", text: "x" }), "bad_request", 400);
-    const s = spec();
+    const s = readySpec();
     const gig = store.createGig("gig", "a", { title: "x", spec: s.id });
     store.claim(gig.id, "bob");
-    expect(store.updateSpec("GIG-S1", "a", { text: "We agree more." })).toEqual({ ...s, text: "We agree more.", version: 2 });
-    expect(store.updateSpec(s.id, "a", { title: "  Renamed  " })).toEqual({ ...s, title: "Renamed", text: "We agree more.", version: 3 });
+    expect(store.updateSpec("GIG-S1", "a", { text: "We agree more." })).toEqual({ ...s, text: "We agree more.", version: 2, status: "active" });
+    expect(store.updateSpec(s.id, "a", { title: "  Renamed  " })).toEqual({ ...s, title: "Renamed", text: "We agree more.", version: 3, status: "active" });
     store.close(gig.id, "bob");
     expect(store.updateSpec(s.id, "a", { title: "After", text: "Done." })).toMatchObject({ title: "After", text: "Done." });
     for (const changes of [{}, { title: " " }, { text: "" }, { text: 3 }, { project: "xy" }, { title: "t", created_by: "z" }]) {
@@ -293,7 +295,8 @@ describe("specs", () => {
 
   test("gigs point to a spec of their own project; set on create, change or clear on update, no inheritance", () => {
     store.createProject("xy");
-    const [s1, s2, other] = [spec(), spec(), spec("Other", "xy")];
+    // other stays a draft: the project mismatch is reported before the lifecycle.
+    const [s1, s2, other] = [readySpec(), readySpec(), spec("Other", "xy")];
     const parent = store.createGig("gig", "a", { title: "parent", spec: "GIG-S1" });
     expect(parent.spec).toBe(s1.id);
     expect(store.createGig("gig", "a", { title: "child", parent: parent.id }).spec).toBeNull();
@@ -308,7 +311,7 @@ describe("specs", () => {
   });
 
   test("spec filters reuse readiness: a blocker outside the spec still blocks", () => {
-    const s = spec();
+    const s = readySpec();
     const outside = store.createGig("gig", "a", { title: "outside", priority: 0 });
     const blocked = store.createGig("gig", "a", { title: "blocked", spec: s.id, priority: 0, blocked_by: [outside.id] });
     const free = store.createGig("gig", "a", { title: "free", spec: s.id });
@@ -324,7 +327,7 @@ describe("specs", () => {
   });
 
   test("claimNext within a spec skips other specs and standalone gigs", () => {
-    const [s1, s2] = [spec(), spec()];
+    const [s1, s2] = [readySpec(), readySpec()];
     store.createGig("gig", "a", { title: "standalone", priority: 0 });
     store.createGig("gig", "a", { title: "other spec", priority: 0, spec: s2.id });
     const mine = store.createGig("gig", "a", { title: "mine", priority: 3, spec: s1.id });
@@ -344,7 +347,7 @@ describe("migration 4", () => {
     db.close();
     store = new Store({ path: join(dir, "gigs.db"), now: () => clock });
     expect(store.getGig(first.id)).toMatchObject({ title: "existing", claimed_by: "holder", spec: null });
-    const s = store.createSpec("gig", "a", { title: "Agreement", text: "text" });
+    const s = store.readySpec(store.createSpec("gig", "a", { title: "Agreement", text: "text" }).id, "a");
     expect(s.id).toBe("gig-s1");
     expect(store.createGig("gig", "a", { title: "within", spec: s.id })).toMatchObject({ id: "gig-2", spec: s.id });
   });

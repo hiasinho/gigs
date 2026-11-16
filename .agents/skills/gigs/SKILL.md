@@ -37,17 +37,23 @@ gig edit <id> -                       # JSON array [{old,new}] on stdin; in orde
 ```
 
 ## Specs
-Spec = agreement (title + text), id like `gig-s3`.
+Spec = temporary agreement (title + text) to create gigs from, id like `gig-s3`.
 ```
-gig spec show <id> [--version n] # {id,title,version,text}
+gig spec show <id> [--version n] # {id,title,version,status,text}
 gig spec history <id>
 gig spec edit <id> --old text --new text
 gig spec edit <id> -       # JSON array [{old,new}] on stdin
-gig spec list
-gig spec create "<title>" -d text|-
+gig spec list [--all]      # draft/ready/active; --all adds done/closed
+gig spec create "<title>" -d text|-   # starts draft
 gig spec update <id> [--title t] [-d text|-]
+gig spec ready <id>                   # only when the human says it's final
+gig spec close <id> -r "<reason>"     # abandon; refused while it has unfinished gigs
+gig spec reopen <id>                  # undo close → draft (or active/done if it has gigs)
 ```
-`--spec <id>` on `create`, `update` (`none` clears), `list`, `ready`, `blocked`, `claim` (no id): only gigs of that spec; project comes from the spec id.
+`status`: `draft` → `ready` (by hand) → `active` (has unfinished gigs) → `done` (all its gigs closed); `closed` = abandoned. active/done are derived; `gig reopen` of one of its gigs makes it active again.
+**done or closed spec = history; the code is the source of truth, not the spec.**
+`--spec <id>` on `create`/`update` only for ready/active specs (server refuses: `spec_draft`, `spec_done`, `spec_closed`); `none` clears. On `list`, `ready`, `blocked`, `claim` (no id): only gigs of that spec, any status; project comes from the spec id.
+Follow-ups: file them (`--discovered-from <your-id>`, plus `--spec` while it's active) **before** closing your own gig; closing the last gig makes the spec done.
 
 ## Labels
 Free-form markers (lowercase, no spaces; `a-z0-9._:-`), e.g. `wontfix`, `triage:needs-info`. Inert: never affect ready/blocked/claim.

@@ -374,16 +374,19 @@ const COMMANDS: Record<string, Command> = {
   },
 
   spec: {
-    usage: "spec create <title> -d text|- | spec update <id> [--title t] [-d text|-] | spec edit <id> --old text --new text | spec edit <id> - | spec history <id> | spec show <id> [--version n] [--full] | spec list",
-    summary: "create, edit, show or list specs: agreements gigs can point to (`-d -` reads the text from stdin)",
+    usage: "spec create <title> -d text|- | spec update <id> [--title t] [-d text|-] | spec edit <id> --old text --new text | spec edit <id> - | spec history <id> | spec show <id> [--version n] [--full] | spec list [--all] | spec ready <id> | spec close <id> -r reason | spec reopen <id>",
+    summary: "create, edit, show or list specs: agreements gigs can point to (`-d -` reads the text from stdin). Status: draft until `spec ready`; active while any of its gigs is unfinished, done once all are closed; closed by `spec close` (abandoned; refused while it has unfinished gigs), which `spec reopen` undoes (stored state back to draft; a spec with gigs is active or done again). `spec list` shows draft, ready and active specs; --all adds done and closed",
     options: {
       description: { type: "string", short: "d" }, title: { type: "string" },
       old: { type: "string" }, new: { type: "string" }, version: { type: "string" },
+      reason: { type: "string", short: "r" }, all: { type: "boolean" },
     },
     async run({ args, values, json, full, print, client, project }) {
-      const action = arg(args, 0, "create|update|edit|history|show|list");
+      const action = arg(args, 0, "create|update|edit|history|show|list|ready|close|reopen");
       if (values.version !== undefined && action !== "show") throw new Error("--version only works with spec show");
       if ((values.old !== undefined || values.new !== undefined) && action !== "edit") throw new Error("--old and --new only work with spec edit");
+      if (values.reason !== undefined && action !== "close") throw new Error("--reason only works with spec close");
+      if (values.all !== undefined && action !== "list") throw new Error("--all only works with spec list");
       if (action === "create") {
         const title = args.slice(1).join(" ");
         if (!title.trim()) throw new Error("missing <title>");
@@ -431,11 +434,28 @@ const COMMANDS: Record<string, Command> = {
       }
       if (action === "list") {
         if (args.length > 1) throw new Error("too many arguments (see `gig spec --help`)");
-        const specs = await client().listSpecs(project());
+        const specs = await client().listSpecs(project(), values.all === true);
         if (json) return print(specs, (list) => list.map(specRow));
-        return console.log(specs.length ? specs.map((s) => `${s.id}  ${s.title}`).join("\n") : "no specs");
+        const w = Math.max(...specs.map((s) => s.id.length));
+        return console.log(specs.length ? specs.map((s) => `${s.id.padEnd(w)}  ${s.status.padEnd(6)}  ${s.title}`).join("\n") : "no specs");
       }
-      throw new Error("expected `gig spec create|update|edit|history|show|list`");
+      if (action === "ready" || action === "close" || action === "reopen") {
+        if (args.length > 2) throw new Error("too many arguments (see `gig spec --help`)");
+        const id = arg(args, 1, "id");
+        const c = client();
+        let spec: Spec;
+        if (action === "close") {
+          const reason = values.reason as string | undefined;
+          if (!reason?.trim()) throw new Error("missing reason: pass -r <reason> (see `gig spec --help`)");
+          spec = await c.closeSpec(id, reason);
+        } else {
+          spec = action === "ready" ? await c.readySpec(id) : await c.reopenSpec(id);
+        }
+        if (json) return print(spec, specRow);
+        // The status shown is the derived one: a spec with gigs stays active or done whatever was set by hand.
+        return console.log(`${{ ready: "marked", close: "closed", reopen: "reopened" }[action]} ${spec.id}; status ${spec.status}`);
+      }
+      throw new Error("expected `gig spec create|update|edit|history|show|list|ready|close|reopen`");
     },
   },
 
@@ -768,12 +788,14 @@ function showDetail(detail: GigDetail): string {
   return lines.join("\n");
 }
 
+/** The compact JSON row of a spec; `state` is left out, the derived `status` is what matters. */
 function specRow(spec: Spec) {
-  return { id: spec.id, title: spec.title, version: spec.version };
+  return compact({ id: spec.id, title: spec.title, version: spec.version, status: spec.status, close_reason: spec.status === "closed" ? spec.close_reason : null });
 }
 
 function showSpec(spec: Spec, full: boolean): string {
-  const lines = [`${spec.id}  ${spec.title}`];
+  const status = spec.status === "closed" ? `closed by ${spec.closed_by}${spec.close_reason ? `: ${spec.close_reason}` : ""}` : spec.status;
+  const lines = [`${spec.id}  ${spec.title}`, `v${spec.version} · ${status}`];
   if (full) lines.push(`created ${spec.created_at} by ${spec.created_by}`);
   return [...lines, "", spec.text].join("\n");
 }

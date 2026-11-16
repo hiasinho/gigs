@@ -80,8 +80,10 @@ async function route(store: Store, req: Request, token: string | undefined): Pro
       return store.blocked(param, url.searchParams.get("spec") ?? undefined);
     case "POST /projects/:/specs":
       return json(store.createSpec(param, actor, await readBody(req)), 201);
-    case "GET /projects/:/specs":
-      return store.listSpecs(param);
+    case "GET /projects/:/specs": {
+      const all = url.searchParams.get("all");
+      return store.listSpecs(param, { all: all === "1" || all === "true" });
+    }
     case "GET /specs/:":
       return store.getSpec(param, url.searchParams.has("version") ? Number(url.searchParams.get("version")) : undefined);
     case "GET /specs/:/history":
@@ -90,6 +92,12 @@ async function route(store: Store, req: Request, token: string | undefined): Pro
       return store.editSpec(param, actor, (await readBody(req)).edits);
     case "PATCH /specs/:":
       return store.updateSpec(param, actor, await readBody(req));
+    case "POST /specs/:/ready":
+      return store.readySpec(param, actor);
+    case "POST /specs/:/close":
+      return store.closeSpec(param, actor, (await readBody(req)).reason);
+    case "POST /specs/:/reopen":
+      return store.reopenSpec(param, actor);
     case "POST /gigs/:/links": {
       const body = await readBody(req);
       return store.addLink(param, body.target, body.kind, actor);

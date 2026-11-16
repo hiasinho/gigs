@@ -92,7 +92,7 @@ describe("claim-next filters", () => {
   });
 
   test("filters combine (AND) with each other and with --spec", () => {
-    const s = store.createSpec("gig", "a", { title: "S", text: "t" });
+    const s = store.readySpec(store.createSpec("gig", "a", { title: "S", text: "t" }).id, "a");
     const epic = create("epic");
     create("in tree, no label", { parent: epic.id, spec: s.id, priority: 0 });
     create("labelled, outside tree", { labels: ["agent"], spec: s.id, priority: 0 });

@@ -37,6 +37,11 @@ export interface Gig {
   close_reason: string | null;
 }
 
+export const SPEC_STATES = ["draft", "ready", "closed"] as const;
+export type SpecState = (typeof SPEC_STATES)[number];
+/** Derived at read time from the stored state and the spec's gigs; never stale. */
+export type SpecStatus = "draft" | "ready" | "active" | "done" | "closed";
+
 /** An agreement about a body of work that gigs can point to. */
 export interface Spec {
   id: string;
@@ -44,6 +49,13 @@ export interface Spec {
   title: string;
   text: string;
   version: number;
+  /** Stored: draft until marked ready; closed when abandoned. */
+  state: SpecState;
+  /** closed if closed; else active while any of its gigs is unfinished, done once all are closed; else the state. */
+  status: SpecStatus;
+  close_reason: string | null;
+  closed_by: string | null;
+  closed_at: string | null;
   created_by: string;
   created_at: string;
 }
@@ -264,6 +276,12 @@ const MIGRATIONS = [
   `
   ALTER TABLE gigs ADD COLUMN human INTEGER NOT NULL DEFAULT 0 CHECK (human IN (0, 1));
   `,
+  `
+  ALTER TABLE specs ADD COLUMN state TEXT NOT NULL DEFAULT 'draft' CHECK (state IN ('draft', 'ready', 'closed'));
+  ALTER TABLE specs ADD COLUMN close_reason TEXT;
+  ALTER TABLE specs ADD COLUMN closed_by TEXT;
+  ALTER TABLE specs ADD COLUMN closed_at TEXT;
+  `,
 ];
 
 const PROJECT_COLUMNS = "prefix, name, created_at";
@@ -271,7 +289,12 @@ const GIG_COLUMNS =
   "id, project, title, description, type, priority, status, claimed_by, claimed_at, claim_expires_at, defer_until, " +
   "created_by, created_at, updated_at, closed_by, closed_at, close_reason, parent, spec, human, " +
   "(SELECT json_group_array(label) FROM labels WHERE gig_id = gigs.id) AS labels";
-const SPEC_COLUMNS = "id, project, title, text, version, created_by, created_at";
+/** A spec's derived status (see Spec.status), using the gigs_spec index. */
+const SPEC_STATUS = `CASE WHEN specs.state = 'closed' THEN 'closed'
+  WHEN EXISTS (SELECT 1 FROM gigs WHERE gigs.spec = specs.id AND gigs.status != 'closed') THEN 'active'
+  WHEN EXISTS (SELECT 1 FROM gigs WHERE gigs.spec = specs.id) THEN 'done'
+  ELSE specs.state END`;
+const SPEC_COLUMNS = `id, project, title, text, version, state, (${SPEC_STATUS}) AS status, close_reason, closed_by, closed_at, created_by, created_at`;
 const COMMENT_COLUMNS = "id, gig_id, author, body, created_at";
 const CLEAR_CLAIM = "claimed_by = NULL, claimed_at = NULL, claim_expires_at = NULL";
 const READY_ORDER = "ORDER BY priority, created_at, number";
@@ -353,7 +376,7 @@ export class Store {
       }
       const blockers = ((input.blocked_by ?? []) as unknown[]).map((id) => this.reference(id));
       const discovered = input.discovered_from == null ? null : this.reference(input.discovered_from);
-      const spec = input.spec == null ? null : this.specReference(input.spec, p.prefix);
+      const spec = input.spec == null ? null : this.assignableSpec(input.spec, p.prefix);
       const labels = input.labels === undefined ? [] : checkLabels(input.labels, "labels");
       const human = input.human === undefined ? false : checkHuman(input.human);
 
@@ -418,7 +441,10 @@ export class Store {
       if (changes.type !== undefined) sets.type = checkType(changes.type);
       if (changes.priority !== undefined) sets.priority = checkPriority(changes.priority);
       if (changes.parent !== undefined) sets.parent = changes.parent === null ? null : this.reference(changes.parent);
-      if (changes.spec !== undefined) sets.spec = changes.spec === null ? null : this.specReference(changes.spec, gig.project);
+      if (changes.spec !== undefined) {
+        sets.spec = changes.spec === null ? null : this.specReference(changes.spec, gig.project);
+        if (sets.spec !== null && sets.spec !== gig.spec) this.checkSpecAssignable(sets.spec);
+      }
       if (changes.human !== undefined) sets.human = checkHuman(changes.human) ? 1 : 0;
       const add = changes.add_labels === undefined ? undefined : checkLabels(changes.add_labels, "add_labels");
       const remove = changes.remove_labels === undefined ? undefined : checkLabels(changes.remove_labels, "remove_labels");
@@ -547,9 +573,11 @@ export class Store {
       const { n } = this.db
         .query("UPDATE projects SET next_spec_number = next_spec_number + 1 WHERE prefix = ? RETURNING next_spec_number - 1 AS n")
         .get(p.prefix) as { n: number };
-      const spec = this.db
-        .query(`INSERT INTO specs (id, project, number, title, text, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING ${SPEC_COLUMNS}`)
-        .get(`${p.prefix}-s${n}`, p.prefix, n, title, text, actor, this.timestamp()) as Spec;
+      const id = `${p.prefix}-s${n}`;
+      this.db
+        .query("INSERT INTO specs (id, project, number, title, text, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .run(id, p.prefix, n, title, text, actor, this.timestamp());
+      const spec = this.mustGetSpec(id);
       this.recordSpecVersion(spec, actor, "create", null, spec.created_at);
       return spec;
     });
@@ -581,10 +609,54 @@ export class Store {
     });
   }
 
-  listSpecs(project: string): Spec[] {
-    return this.op(() =>
-      this.db.query(`SELECT ${SPEC_COLUMNS} FROM specs WHERE project = ? ORDER BY number`).all(this.mustGetProject(project).prefix) as Spec[],
-    );
+  /** Specs of a project. Default: draft, ready and active only; `all` includes done and closed. */
+  listSpecs(project: string, filter: { all?: boolean } = {}): Spec[] {
+    return this.op(() => {
+      const where = filter.all ? "" : ` AND (${SPEC_STATUS}) NOT IN ('done', 'closed')`;
+      return this.db.query(`SELECT ${SPEC_COLUMNS} FROM specs WHERE project = ?${where} ORDER BY number`).all(this.mustGetProject(project).prefix) as Spec[];
+    });
+  }
+
+  // State changes are not content: they bump no version and write no history.
+
+  /** Marks a draft spec ready (the owner says it is final); idempotent. A closed spec must be reopened first. */
+  readySpec(id: string, actor: string): Spec {
+    return this.op(() => {
+      checkActor(actor);
+      const spec = this.mustGetSpec(id);
+      if (spec.state === "closed") throw conflict(`spec ${spec.id} is closed; reopen it first: gig spec reopen ${spec.id}`, "spec_closed");
+      if (spec.state === "ready") return spec;
+      this.db.query("UPDATE specs SET state = 'ready' WHERE id = ?").run(spec.id);
+      return this.mustGetSpec(spec.id);
+    });
+  }
+
+  /** Abandons a spec; refused while any of its gigs is unfinished. */
+  closeSpec(id: string, actor: string, reason: unknown): Spec {
+    return this.op(() => {
+      actor = checkActor(actor);
+      if (typeof reason !== "string" || !reason.trim()) throw badRequest("reason is required");
+      const spec = this.mustGetSpec(id);
+      if (spec.state === "closed") throw conflict(`spec ${spec.id} is already closed`);
+      const unfinished = this.db.query("SELECT id FROM gigs WHERE spec = ? AND status != 'closed' ORDER BY number").all(spec.id) as { id: string }[];
+      if (unfinished.length) {
+        throw conflict(`spec ${spec.id} has unfinished gigs: ${unfinished.map((g) => g.id).join(", ")}; close them or clear their spec (gig update <id> --spec none) first`, "spec_active");
+      }
+      this.db.query("UPDATE specs SET state = 'closed', close_reason = ?, closed_by = ?, closed_at = ? WHERE id = ?")
+        .run(reason.trim(), actor, this.timestamp(), spec.id);
+      return this.mustGetSpec(spec.id);
+    });
+  }
+
+  /** Makes a closed spec a draft again; marking it ready is a deliberate second step. */
+  reopenSpec(id: string, actor: string): Spec {
+    return this.op(() => {
+      checkActor(actor);
+      const spec = this.mustGetSpec(id);
+      if (spec.state !== "closed") throw conflict(`spec ${spec.id} is not closed`);
+      this.db.query("UPDATE specs SET state = 'draft', close_reason = NULL, closed_by = NULL, closed_at = NULL WHERE id = ?").run(spec.id);
+      return this.mustGetSpec(spec.id);
+    });
   }
 
   getSpec(id: string, version?: unknown): Spec {
@@ -851,6 +923,21 @@ export class Store {
     const spec = this.mustGetSpec(id);
     if (spec.project !== project) throw badRequest(`spec ${spec.id} belongs to project ${spec.project}, not ${project}`);
     return spec.id;
+  }
+
+  /** specReference plus the lifecycle rule for pointing a gig at a spec. */
+  private assignableSpec(id: unknown, project: string): string {
+    const spec = this.specReference(id, project);
+    this.checkSpecAssignable(spec);
+    return spec;
+  }
+
+  /** New work may only point at a ready or active spec. */
+  private checkSpecAssignable(id: string) {
+    const spec = this.mustGetSpec(id);
+    if (spec.status === "draft") throw conflict(`spec ${spec.id} is a draft; mark it ready first: gig spec ready ${spec.id}`, "spec_draft");
+    if (spec.status === "done") throw conflict(`spec ${spec.id} is done and is history; link the new gig with --discovered-from <gig> instead`, "spec_done");
+    if (spec.status === "closed") throw conflict(`spec ${spec.id} is closed (abandoned); reopen it first (gig spec reopen ${spec.id}) or file the gig without --spec`, "spec_closed");
   }
 
   private insertLink(id: string, target: string, kind: LinkKind) {

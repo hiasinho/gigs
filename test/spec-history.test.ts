@@ -114,13 +114,14 @@ test("snapshot insertion failures roll back create, update and edit", () => {
 test("migration 5 backfills the current v4 state at version 1 using its creator and creation time", () => {
   const first = create();
   store.updateSpec(first.id, "bob", { title: "Current", text: "Current text" });
+  store.readySpec(first.id, "a");
   store.createGig("gig", "a", { title: "linked", spec: first.id });
   store.dispose();
   const db = new Database(path);
-  db.run("ALTER TABLE gigs DROP COLUMN human; DROP TABLE labels; DROP TABLE spec_versions; ALTER TABLE specs DROP COLUMN version; PRAGMA user_version = 4;");
+  db.run("ALTER TABLE specs DROP COLUMN state; ALTER TABLE specs DROP COLUMN close_reason; ALTER TABLE specs DROP COLUMN closed_by; ALTER TABLE specs DROP COLUMN closed_at; ALTER TABLE gigs DROP COLUMN human; DROP TABLE labels; DROP TABLE spec_versions; ALTER TABLE specs DROP COLUMN version; PRAGMA user_version = 4;");
   db.close();
   store = new Store({ path });
-  expect(store.getSpec(first.id)).toEqual({ ...first, title: "Current", text: "Current text" });
+  expect(store.getSpec(first.id)).toEqual({ ...first, title: "Current", text: "Current text", status: "active" });
   expect(store.getSpec(first.id, 1)).toEqual(store.getSpec(first.id));
   expect(store.specHistory(first.id)).toEqual([{ version: 1, by: "alice", at, kind: "create" }]);
   expect(store.getGig("gig-1").spec).toBe(first.id);

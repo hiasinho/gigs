@@ -58,7 +58,7 @@ describe("human gigs", () => {
   });
 
   test("claim-next with a spec skips human gigs too", () => {
-    const s = store.createSpec("gig", "a", { title: "S", text: "t" });
+    const s = store.readySpec(store.createSpec("gig", "a", { title: "S", text: "t" }).id, "a");
     const human = create("in spec, human", { spec: s.id, priority: 0, human: true });
     create("outside spec", { priority: 0 });
     const agent = create("in spec", { spec: s.id, priority: 3 });
@@ -136,7 +136,7 @@ describe("migration 7", () => {
     store.claim(held.id, "holder");
     store.dispose();
     const db = new Database(path);
-    db.run("ALTER TABLE gigs DROP COLUMN human; PRAGMA user_version = 6;");
+    db.run("ALTER TABLE specs DROP COLUMN state; ALTER TABLE specs DROP COLUMN close_reason; ALTER TABLE specs DROP COLUMN closed_by; ALTER TABLE specs DROP COLUMN closed_at; ALTER TABLE gigs DROP COLUMN human; PRAGMA user_version = 6;");
     db.close();
     store = new Store({ path, now: () => clock, claimTtlMinutes: 30 });
     expect(store.getGig(held.id)).toMatchObject({ title: "held", claimed_by: "holder", labels: ["x"], human: false });

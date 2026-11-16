@@ -112,8 +112,21 @@ export class Client {
     return this.request<Spec>("POST", `/projects/${enc(project)}/specs`, { title, text });
   }
 
-  listSpecs(project: string) {
-    return this.request<Spec[]>("GET", `/projects/${enc(project)}/specs`);
+  /** Draft, ready and active specs; `all` includes done and closed. */
+  listSpecs(project: string, all = false) {
+    return this.request<Spec[]>("GET", `/projects/${enc(project)}/specs${all ? "?all=1" : ""}`);
+  }
+
+  readySpec(id: string) {
+    return this.request<Spec>("POST", `/specs/${enc(id)}/ready`);
+  }
+
+  closeSpec(id: string, reason: string) {
+    return this.request<Spec>("POST", `/specs/${enc(id)}/close`, { reason });
+  }
+
+  reopenSpec(id: string) {
+    return this.request<Spec>("POST", `/specs/${enc(id)}/reopen`);
   }
 
   getSpec(id: string, version?: number) {

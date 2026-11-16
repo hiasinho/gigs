@@ -114,14 +114,46 @@ See [GLOSSARY.md](GLOSSARY.md) for the exact vocabulary.
 
 ## Specs
 
-A spec is an agreement (title and text) stored in Gigs; IDs are `<prefix>-s<n>`. Specs are optional
-and can be edited any time with `gig spec update <id> [--title t] [-d text|-]`. A gig may point to
+A spec is a temporary agreement (title and text) stored in Gigs, from which gigs are created; IDs
+are `<prefix>-s<n>`. Specs are optional and can be edited any time with
+`gig spec update <id> [--title t] [-d text|-]`. A gig may point to
 one spec of its own project; children don't inherit it. `--spec <id>` on `list`, `ready`, `blocked`
 and `claim` limits them to gigs pointing to that spec, with readiness unchanged (a blocker outside
 the spec still blocks). With `--spec`, the project comes from the spec id, so no `.gigs.json` is
 needed.
 
-Each spec starts at version 1. Every change saves a new numbered state and a compact history
+### Spec status
+
+| Status   | Set by                                                      | New gig may point to it |
+| -------- | ----------------------------------------------------------- | ----------------------- |
+| `draft`  | default on `spec create`; `spec reopen`                     | no (`spec_draft`)       |
+| `ready`  | `gig spec ready <id>`, once the owner says the spec is final | yes                     |
+| `active` | derived: the spec has at least one unfinished gig           | yes                     |
+| `done`   | derived: the spec has gigs and all are closed               | no (`spec_done`)        |
+| `closed` | `gig spec close <id> -r <reason>` (abandoned)               | no (`spec_closed`)      |
+
+Only draft, ready and closed are stored; active and done are derived from the spec's gigs at read
+time, so they never go stale. A spec with gigs is active or done whatever was set by hand, except
+closed, which always wins. Deferred gigs count as unfinished.
+
+- The server checks the status whenever a gig is pointed at a spec: `gig create --spec` and
+  `gig update --spec` to a different spec. Clearing (`--spec none`) and re-setting the gig's current
+  spec are always allowed; `--spec` filters on `list`, `ready`, `blocked` and `claim` accept any status.
+  Refusals are 409s: `spec_draft` ("mark it ready first: gig spec ready X"), `spec_done` ("link the new
+  gig with --discovered-from <gig> instead"), `spec_closed` ("reopen it first (gig spec reopen X) or file
+  the gig without --spec").
+- Work found while the spec is active (a follow-up) may still point to it and keeps it active. Once it
+  is done, link follow-ups with `--discovered-from` instead. `gig reopen` of one of its closed gigs is
+  the intentional way back to active.
+- `gig spec close` needs a reason and is refused (`spec_active`) while the spec has unfinished gigs:
+  close them or clear their spec first. A done spec can be closed. `gig spec reopen` undoes a close
+  and sets the stored state back to draft (mark it ready once more if it still is); a spec with gigs
+  then derives active or done again.
+- `gig spec ready` on a closed spec is refused (`spec_closed`); on a ready spec it is a no-op.
+- Status changes are not content: they bump no version and add no history entry.
+- `gig spec list` shows draft, ready and active specs; `--all` adds done and closed.
+
+Each spec starts at version 1. Every change to its title or text saves a new numbered state and a compact history
 entry; a no-op saves nothing. Gigs still point to the spec, not a particular version.
 Use `gig spec edit` for exact text replacements: each `old` must be non-empty and occur exactly
 once at that step. Edits run in order, all-or-nothing; `new` may be empty, but the final text may
@@ -129,8 +161,9 @@ not be empty. Full title/text replacement via `gig spec update` remains availabl
 `gig spec history <id>` shows the changes; `gig spec show <id> --version n` reads an older state.
 
 ```sh
-gig spec create "Checkout v2" -d - < docs/checkout.md   # ws-s1
-gig create "Payment API" --spec ws-s1
+gig spec create "Checkout v2" -d - < docs/checkout.md   # ws-s1, draft
+gig spec ready ws-s1                                    # final: gigs may point to it
+gig create "Payment API" --spec ws-s1                   # ws-s1 is now active
 gig ready --spec ws-s1
 gig claim --spec ws-s1
 gig spec edit ws-s1 --old "Payment API" --new "Payments API"
@@ -189,7 +222,8 @@ gig claim [--spec id] [--parent id] [--label l[,l]] [--exclude-label l[,l]]   # 
 gig close <id...> [-r reason] [--force]                                   gig reopen <id>
 gig defer <id> [--until <ISO time|YYYY-MM-DD|30m|4h|2d>]                  gig undefer <id>
 gig comment <id> <text|->                                                 gig skill
-gig spec create <title> -d text|-  gig spec show <id> [--version n] [--full]  gig spec list
+gig spec create <title> -d text|-  gig spec show <id> [--version n] [--full]  gig spec list [--all]
+gig spec ready <id>                gig spec close <id> -r reason          gig spec reopen <id>
 gig spec update <id> [--title t] [-d text|-]
 gig spec edit <id> --old text --new text   gig spec edit <id> -   # JSON array [{old,new}] on stdin
 gig spec history <id>
@@ -218,8 +252,8 @@ silently dropping someone else's change. Text starting with `-` needs `--old=<te
     claim/close fields, `parent` and relations as `{id, title, status}` (unfinished only), `closed`
     counts per relation, and `comments: [{author, at, body}]`. `claim` prints `null` if nothing is ready.
   - `comment` prints `{gig_id, author, at, body}`.
-  - `spec create`, `spec update`, `spec edit` and `spec list` print `{id, title, version}`;
-    `spec show` prints `{id, title, version, text}`.
+  - `spec create`, `spec update`, `spec edit`, `spec ready`, `spec close`, `spec reopen` and `spec list`
+    print `{id, title, version, status, close_reason?}`; `spec show` prints the same plus `text`.
   - `spec history` prints ascending `{version, by, at, kind, title?, text?, edits?}` entries:
     changed titles are included, full text updates use `text: "replaced"`, and edits include
     the `{old,new}` replacements.
@@ -230,7 +264,9 @@ silently dropping someone else's change. Text starting with `-` needs `--old=<te
   lapses and someone else may pick the gig up.
 - Narrow what you pick up with `gig claim --label ready-for-agent` or `gig claim --parent <epic>`
   (the whole subtree under it); a filter that matches nothing prints `null`.
-- File work you find but won't do with `--discovered-from <your gig>`.
+- File work you find but won't do with `--discovered-from <your gig>`, before you close your gig: while
+  the spec is active, the follow-up may also take `--spec`; once it is done, the server refuses that.
+- A done or closed spec is history: the code is the source of truth, not the spec text.
 - Never claim a human gig (`human: true`) unless a human tells you to. When you need a human
   decision, create a human gig that blocks your own (`--human-only`, then `gig dep add <yours> <new>`),
   release yours with `gig unclaim <yours>`, then stop or move on.

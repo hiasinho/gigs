@@ -77,11 +77,30 @@ A link from a gig to the gig whose work turned it up.
 A set of gigs connected by blockers. A plan is not a separate thing in Gigs; it exists only as those connections.
 
 **Spec**:
-An agreement about a body of work, kept in Gigs, that gigs can point to. A gig points to at most one spec, of its own project, and pointing to one changes nothing about whether the gig is ready.
+A temporary agreement about a body of work, kept in Gigs, from which gigs are created and which they can point to. A gig points to at most one spec, of its own project, and pointing to one changes nothing about whether the gig is ready. Once its gigs are done, the code is the source of truth and the spec is history.
 _Avoid_: Document, requirements
 
+**Spec status**:
+Where a spec is in its life. Draft, ready and closed are set by hand; active and done follow from the spec's gigs and are never set by hand. A new gig can point only to a ready or active spec.
+_Avoid_: Spec state
+
+**Draft spec**:
+A spec still being written. Every spec starts as a draft.
+
+**Ready spec**:
+A spec its owner has declared final, so gigs may now be created from it.
+
+**Active spec**:
+A spec with at least one unfinished gig, whatever was set by hand, unless it is closed.
+
+**Done spec**:
+A spec that has gigs, all of them closed. It is history: new work it turns up is linked as discovered from one of its gigs.
+
+**Closed spec**:
+A spec abandoned by hand, with a reason. Closed wins over active and done; it can be reopened as a draft.
+
 **Version**:
-A numbered state of a spec; every change makes a new one.
+A numbered state of a spec's title and text; every change to them makes a new one. Status changes do not.
 
 ### Picking up work
 

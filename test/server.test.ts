@@ -159,6 +159,7 @@ test("spec routes: create, list, show, update, spec filters and claim within a s
   expect((await call("PATCH", "/specs/sp-s1", { actor: "a", body: "{}" })).status).toBe(400);
   expect((await call("PATCH", "/specs/sp-s9", { actor: "a", body: JSON.stringify({ title: "x" }) })).status).toBe(404);
 
+  expect((await post("/specs/sp-s1/ready")).status).toBe(200);
   const within = (await (await post("/projects/sp/gigs", { title: "within", spec: "sp-s1" })).json()) as any;
   expect(within.spec).toBe("sp-s1");
   const standalone = (await (await post("/projects/sp/gigs", { title: "standalone", priority: 0 })).json()) as any;

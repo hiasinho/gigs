@@ -451,21 +451,22 @@ test("specs through the real CLI: create, show, list, --spec filters, project fr
   const env = { GIG_PROJECT: "sq" };
   const json = (args: string[], opts: Parameters<typeof cli>[1] = { env }) => cliJson(args, opts);
 
-  expect(await json(["spec", "create", "Checkout", "v2", "-d", "-"], { env, stdin: "We agree on\nthe flow.\n" })).toEqual({ id: "sq-s1", title: "Checkout v2", version: 1 });
-  expect(await json(["spec", "create", "Second", "-d", "short"])).toEqual({ id: "sq-s2", title: "Second", version: 1 });
+  expect(await json(["spec", "create", "Checkout", "v2", "-d", "-"], { env, stdin: "We agree on\nthe flow.\n" })).toEqual({ id: "sq-s1", title: "Checkout v2", version: 1, status: "draft" });
+  expect(await json(["spec", "create", "Second", "-d", "short"])).toEqual({ id: "sq-s2", title: "Second", version: 1, status: "draft" });
   expect((await cli(["spec", "create", "No text"], { env })).stderr).toContain("missing text");
-  expect(await json(["spec", "show", "SQ-S1"], { cwd })).toEqual({ id: "sq-s1", title: "Checkout v2", version: 1, text: "We agree on\nthe flow." });
+  expect(await json(["spec", "show", "SQ-S1"], { cwd })).toEqual({ id: "sq-s1", title: "Checkout v2", version: 1, status: "draft", text: "We agree on\nthe flow." });
   expect(await json(["spec", "show", "sq-s1", "--full"], { cwd })).toMatchObject({ id: "sq-s1", project: "sq", created_by: "agent-1" });
-  expect((await cli(["spec", "show", "sq-s1", "--human"], { cwd })).stdout).toBe("sq-s1  Checkout v2\n\nWe agree on\nthe flow.\n");
-  expect(await json(["spec", "list"])).toEqual([{ id: "sq-s1", title: "Checkout v2", version: 1 }, { id: "sq-s2", title: "Second", version: 1 }]);
-  expect((await cli(["spec", "list", "--human"], { env })).stdout).toBe("sq-s1  Checkout v2\nsq-s2  Second\n");
+  expect((await cli(["spec", "show", "sq-s1", "--human"], { cwd })).stdout).toBe("sq-s1  Checkout v2\nv1 · draft\n\nWe agree on\nthe flow.\n");
+  expect(await json(["spec", "list"])).toEqual([{ id: "sq-s1", title: "Checkout v2", version: 1, status: "draft" }, { id: "sq-s2", title: "Second", version: 1, status: "draft" }]);
+  expect((await cli(["spec", "list", "--human"], { env })).stdout).toBe("sq-s1  draft   Checkout v2\nsq-s2  draft   Second\n");
   expect((await cli(["spec", "show", "sq-s9"], { cwd })).code).toBe(1);
   expect((await cli(["spec", "edit", "sq-s1"], { env })).code).toBe(1);
-  expect(await json(["spec", "update", "sq-s2", "--title", "Second v2", "-d", "-"], { env, stdin: "Longer\ntext\n" })).toEqual({ id: "sq-s2", title: "Second v2", version: 2 });
-  expect(await json(["spec", "show", "sq-s2"], { env })).toEqual({ id: "sq-s2", title: "Second v2", version: 2, text: "Longer\ntext" });
+  expect(await json(["spec", "update", "sq-s2", "--title", "Second v2", "-d", "-"], { env, stdin: "Longer\ntext\n" })).toEqual({ id: "sq-s2", title: "Second v2", version: 2, status: "draft" });
+  expect(await json(["spec", "show", "sq-s2"], { env })).toEqual({ id: "sq-s2", title: "Second v2", version: 2, status: "draft", text: "Longer\ntext" });
   expect((await cli(["spec", "update", "sq-s2", "--human", "-d", "short"], { env })).stdout).toBe("updated sq-s2\n");
   expect((await cli(["spec", "update", "sq-s2"], { env })).stderr).toContain("nothing to update");
-  expect(await json(["spec", "update", "sq-s2", "--title", "Second"], { env })).toEqual({ id: "sq-s2", title: "Second", version: 4 });
+  expect(await json(["spec", "update", "sq-s2", "--title", "Second"], { env })).toEqual({ id: "sq-s2", title: "Second", version: 4, status: "draft" });
+  for (const id of ["sq-s1", "sq-s2"]) expect(await json(["spec", "ready", id])).toMatchObject({ id, status: "ready" });
 
   // Without .gigs.json, the project comes from the spec id; it wins over a different -P.
   const blocker = await json(["create", "Outside", "-p", "0"]);
@@ -495,7 +496,7 @@ test("spec edit and history through CLI: flags, stdin, snapshots, raw and human 
   store.createProject("ve");
   const opts = { env: { GIG_PROJECT: "ve" } };
   const first = await cliJson(["spec", "create", "Agreement", "-d", "one two"], opts);
-  expect(first).toEqual({ id: "ve-s1", title: "Agreement", version: 1 });
+  expect(first).toEqual({ id: "ve-s1", title: "Agreement", version: 1, status: "draft" });
   expect(await cliJson(["spec", "edit", first.id, "--old", "one", "--new", "first"], opts)).toEqual({ ...first, version: 2 });
   const edits = [{ old: "first", new: "last" }, { old: "last two", new: "done" }];
   expect(await cliJson(["spec", "edit", first.id, "-"], { ...opts, stdin: JSON.stringify(edits) })).toEqual({ ...first, version: 3 });
