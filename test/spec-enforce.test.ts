@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHandler } from "../src/server";
 import { GigsError, Store } from "../src/store";
+import { bunDescribe, openStore } from "./harness";
 
 // Pointing a gig at a spec (create with spec, update to a different spec) needs a ready or active spec.
 
@@ -27,7 +28,7 @@ describe("store", () => {
   let store: Store;
   let n = 0;
   beforeEach(() => {
-    store = new Store({ path: join(dir, `store-${++n}.db`) });
+    store = openStore(join(dir, `store-${++n}.db`));
     store.createProject("gig");
   });
   afterEach(() => store.dispose());
@@ -115,8 +116,8 @@ describe("store", () => {
   });
 });
 
-describe("http and cli", () => {
-  const store = new Store({ path: join(dir, "http.db") });
+bunDescribe("http and cli", () => {
+  const store = openStore(join(dir, "http.db"));
   const server = Bun.serve({ port: 0, fetch: createHandler(store, { adminToken: "t0k" }) });
   const handle = createHandler(store, { adminToken: "t0k" });
   afterAll(() => { server.stop(true); store.dispose(); });

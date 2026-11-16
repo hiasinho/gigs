@@ -1,18 +1,19 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Sql } from "../src/sql";
 import { GigsError, Store, type NewGig } from "../src/store";
+import { openSql, openStore } from "./harness";
 
 let dir: string;
 let store: Store;
-let db: Database;
+let db: Sql;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "gigs-links-"));
   const path = join(dir, "test.db");
-  store = new Store({ path });
-  db = new Database(path);
+  store = openStore(path);
+  db = openSql(path);
   store.createProject("gig");
   store.createProject("xy");
 });
@@ -54,7 +55,7 @@ test("deferred ancestors prevent readiness but alone do not make descendants blo
   const root = create("root");
   const mid = create("mid", { parent: root.id });
   const leaf = create("leaf", { parent: mid.id });
-  db.query("UPDATE gigs SET status = 'deferred' WHERE id = ?").run(root.id);
+  db.run("UPDATE gigs SET status = 'deferred' WHERE id = ?", root.id);
   expect(store.getDetail(leaf.id).reasons).toEqual([{ kind: "deferred_ancestor", id: root.id }]);
   expect(store.ready("gig")).toEqual([]);
   expect(store.blocked("gig").map((e) => e.gig.id)).toEqual([mid.id]);
@@ -107,7 +108,7 @@ test("parent-chain cycles are explicitly rejected by structural validation", () 
   const a = create("a");
   const b = create("b", { parent: a.id });
   // No parent update command in slice 2: exercise the defensive parent-chain check with SQL.
-  db.query("UPDATE gigs SET parent = ? WHERE id = ?").run(b.id, a.id);
+  db.run("UPDATE gigs SET parent = ? WHERE id = ?", b.id, a.id);
   const err = error(() => create("unrelated"), "cycle");
   expect(err.message).toContain("parent cycle");
   expect(err.message).toContain(a.id);
@@ -121,7 +122,7 @@ test("close requires all children finished unless forced, without closing childr
   expect(store.close(parent.id, "a", "force", true).status).toBe("closed");
   expect(store.getGig(child.id).status).toBe("open");
   store.reopen(parent.id);
-  db.query("UPDATE gigs SET status = 'deferred' WHERE id = ?").run(child.id);
+  db.run("UPDATE gigs SET status = 'deferred' WHERE id = ?", child.id);
   error(() => store.close(parent.id, "a"), "has_open_children");
   store.close(child.id, "a");
   expect(store.close(parent.id, "a").status).toBe("closed");
@@ -133,7 +134,7 @@ test("relations have summary shape, related dedupes both ways and removes from e
   const b = create("b", { parent: a.id, discovered_from: a.id });
   add(b.id, a.id, "related");
   add(a.id, b.id, "related");
-  expect(db.query("SELECT COUNT(*) AS n FROM links WHERE kind = 'related'").get()).toEqual({ n: 1 });
+  expect(db.get("SELECT COUNT(*) AS n FROM links WHERE kind = 'related'")).toEqual({ n: 1 });
   const detail = store.getDetail(a.id);
   expect(detail.children).toEqual([{ id: b.id, title: "b", type: "task", status: "open", priority: 2 }]);
   expect(detail.related).toEqual(detail.children);

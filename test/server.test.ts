@@ -4,9 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { configFromEnv, createHandler } from "../src/server";
 import { Store } from "../src/store";
+import { openStore } from "./harness";
 
 const dir = mkdtempSync(join(tmpdir(), "gigs-server-"));
-const store = new Store({ path: join(dir, "gigs.db") });
+const store = openStore(join(dir, "gigs.db"));
 const handle = createHandler(store, { adminToken: "s3cret" });
 
 afterAll(() => {

@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Database } from "bun:sqlite";
 import { GigsError, Store } from "../src/store";
+import { openSql, openStore } from "./harness";
 
 /** Removes migrations 8, 7, 6, 5 and 4, leaving a v3 database. */
 const DROP_MIGRATION_4 =
@@ -19,7 +19,7 @@ const tick = () => (clock = new Date(clock.getTime() + 1000));
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "gigs-store-"));
   clock = new Date("2026-01-01T00:00:00.000Z");
-  store = new Store({ path: join(dir, "gigs.db"), now: () => clock });
+  store = openStore(join(dir, "gigs.db"), { now: () => clock });
   store.createProject("gig", "Gigs");
 });
 
@@ -231,12 +231,12 @@ describe("migrations", () => {
     const first = store.createGig("gig", "a", { title: "existing" });
     store.claim(first.id, "holder");
     // Reconstruct the exact v1 schema by removing only migration 2's additions.
-    const db = new Database(join(dir, "gigs.db"));
-    db.run(DROP_MIGRATION_4);
-    db.run("DROP TABLE comments; ALTER TABLE gigs DROP COLUMN claim_expires_at; ALTER TABLE gigs DROP COLUMN defer_until;");
-    db.run("DROP TABLE links; DROP INDEX gigs_parent; ALTER TABLE gigs DROP COLUMN parent; PRAGMA user_version = 1;");
+    const db = openSql(join(dir, "gigs.db"));
+    db.exec(DROP_MIGRATION_4);
+    db.exec("DROP TABLE comments; ALTER TABLE gigs DROP COLUMN claim_expires_at; ALTER TABLE gigs DROP COLUMN defer_until;");
+    db.exec("DROP TABLE links; DROP INDEX gigs_parent; ALTER TABLE gigs DROP COLUMN parent;"); db.setVersion(1);
     db.close();
-    const upgraded = new Store({ path: join(dir, "gigs.db") });
+    const upgraded = openStore(join(dir, "gigs.db"));
     try {
       expect(upgraded.getGig(first.id)).toMatchObject({ title: "existing", parent: null, claimed_by: "holder" });
       const child = upgraded.createGig("gig", "a", { title: "child", parent: first.id });
@@ -244,13 +244,13 @@ describe("migrations", () => {
       expect(upgraded.getDetail(first.id).children[0]?.id).toBe(child.id);
     } finally { upgraded.dispose(); }
   });
-  test("set user_version and survive reopening the database", () => {
+  test("set the schema version and survive reopening the database", () => {
     store.createGig("gig", "a", { title: "x" });
-    const again = new Store({ path: join(dir, "gigs.db") });
+    const again = openStore(join(dir, "gigs.db"));
     expect(again.getGig("gig-1").title).toBe("x");
     again.dispose();
-    const db = new Database(join(dir, "gigs.db"));
-    expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
+    const db = openSql(join(dir, "gigs.db"));
+    expect(db.version()).toBe(9);
     db.close();
   });
 });
@@ -342,10 +342,10 @@ describe("migration 4", () => {
     const first = store.createGig("gig", "a", { title: "existing" });
     store.claim(first.id, "holder");
     store.dispose();
-    const db = new Database(join(dir, "gigs.db"));
-    db.run(DROP_MIGRATION_4 + " PRAGMA user_version = 3;");
+    const db = openSql(join(dir, "gigs.db"));
+    db.exec(DROP_MIGRATION_4); db.setVersion(3);
     db.close();
-    store = new Store({ path: join(dir, "gigs.db"), now: () => clock });
+    store = openStore(join(dir, "gigs.db"), { now: () => clock });
     expect(store.getGig(first.id)).toMatchObject({ title: "existing", claimed_by: "holder", spec: null });
     const s = store.readySpec(store.createSpec("gig", "a", { title: "Agreement", text: "text" }).id, "a");
     expect(s.id).toBe("gig-s1");

@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GigsError, Store } from "../src/store";
+import { openStore } from "./harness";
 
 // Exact find/replace on gig descriptions, on a fake clock.
 
@@ -16,7 +17,7 @@ const at = (offsetMinutes: number) => new Date(Date.parse(T0) + offsetMinutes * 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "gigs-gig-edit-"));
   clock = new Date(T0);
-  store = new Store({ path: join(dir, "gigs.db"), now: () => clock, claimTtlMinutes: 30 });
+  store = openStore(join(dir, "gigs.db"), { now: () => clock, claimTtlMinutes: 30 });
   store.createProject("gig");
 });
 afterEach(() => { store.dispose(); rmSync(dir, { recursive: true, force: true }); });

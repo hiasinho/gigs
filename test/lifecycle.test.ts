@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GigsError, Store } from "../src/store";
+import { openSql, openStore } from "./harness";
 
 // Claim expiry, renewal, heartbeat, defer/undefer, update and comments, all on a fake clock.
 
@@ -19,7 +19,7 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "gigs-lifecycle-"));
   path = join(dir, "gigs.db");
   clock = new Date(T0);
-  store = new Store({ path, now: () => clock, claimTtlMinutes: 30 });
+  store = openStore(path, { now: () => clock, claimTtlMinutes: 30 });
   store.createProject("gig");
 });
 afterEach(() => { store.dispose(); rmSync(dir, { recursive: true, force: true }); });
@@ -110,7 +110,7 @@ describe("claim expiry", () => {
 
   test("the claim TTL must be positive, finite and representable", () => {
     for (const claimTtlMinutes of [0, Infinity, 1e300, 1e10]) {
-      expect(() => new Store({ path, claimTtlMinutes })).toThrow();
+      expect(() => openStore(path, { claimTtlMinutes })).toThrow();
     }
   });
 });
@@ -237,12 +237,12 @@ describe("migration 3", () => {
     store.claim(held.id, "holder");
     store.addComment(held.id, "holder", "gone after downgrade");
     store.dispose();
-    const db = new Database(path);
-    db.run("DROP TABLE tokens; ALTER TABLE gigs DROP COLUMN human; DROP TABLE labels; DROP TABLE spec_versions; ALTER TABLE specs DROP COLUMN version; DROP INDEX gigs_spec; ALTER TABLE gigs DROP COLUMN spec; ALTER TABLE projects DROP COLUMN next_spec_number; DROP TABLE specs;");
-    db.run("DROP TABLE comments; ALTER TABLE gigs DROP COLUMN claim_expires_at; ALTER TABLE gigs DROP COLUMN defer_until; PRAGMA user_version = 2;");
+    const db = openSql(path);
+    db.exec("DROP TABLE tokens; ALTER TABLE gigs DROP COLUMN human; DROP TABLE labels; DROP TABLE spec_versions; ALTER TABLE specs DROP COLUMN version; DROP INDEX gigs_spec; ALTER TABLE gigs DROP COLUMN spec; ALTER TABLE projects DROP COLUMN next_spec_number; DROP TABLE specs;");
+    db.exec("DROP TABLE comments; ALTER TABLE gigs DROP COLUMN claim_expires_at; ALTER TABLE gigs DROP COLUMN defer_until;"); db.setVersion(2);
     db.close();
     minutes(120);
-    store = new Store({ path, now: () => clock, claimTtlMinutes: 30 });
+    store = openStore(path, { now: () => clock, claimTtlMinutes: 30 });
     expect(store.getGig(held.id)).toMatchObject({ status: "in_progress", claimed_by: "holder", claimed_at: T0, claim_expires_at: at(150), defer_until: null });
     expect(store.getDetail(held.id).comments).toEqual([]);
     minutes(30);

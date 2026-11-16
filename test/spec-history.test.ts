@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GigsError, Store } from "../src/store";
+import { openSql, openStore } from "./harness";
 
 let dir: string;
 let path: string;
@@ -12,7 +12,7 @@ const at = "2026-01-01T00:00:00.000Z";
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "gigs-spec-history-"));
   path = join(dir, "test.db");
-  store = new Store({ path, now: () => new Date(at) });
+  store = openStore(path, { now: () => new Date(at) });
   store.createProject("gig");
 });
 afterEach(() => { store.dispose(); rmSync(dir, { recursive: true, force: true }); });
@@ -51,7 +51,7 @@ test("numbered snapshots and compact ascending history for each kind of change",
   error(() => store.specHistory("gig-s99"), "not_found", 404);
   error(() => store.editSpec("gig-s99", "a", []), "not_found", 404);
   store.dispose();
-  store = new Store({ path });
+  store = openStore(path);
   expect(store.getSpec(first.id, 1)).toEqual(first);
   expect(store.specHistory(first.id)).toHaveLength(5);
 });
@@ -97,16 +97,16 @@ test("no-op updates and edits do not create versions, including sequences with n
 
 test("snapshot insertion failures roll back create, update and edit", () => {
   const s = create();
-  const db = new Database(path);
+  const db = openSql(path);
   try {
-    db.run("CREATE TRIGGER reject_version BEFORE INSERT ON spec_versions BEGIN SELECT RAISE(ABORT, 'no history'); END;");
+    db.exec("CREATE TRIGGER reject_version BEFORE INSERT ON spec_versions BEGIN SELECT RAISE(ABORT, 'no history'); END;");
     expect(() => create()).toThrow("no history");
     expect(() => store.updateSpec(s.id, "a", { title: "changed" })).toThrow("no history");
     expect(() => store.editSpec(s.id, "a", [{ old: "one", new: "changed" }])).toThrow("no history");
     expect(store.getSpec(s.id)).toEqual(s);
     expect(store.listSpecs("gig")).toHaveLength(1);
     expect(store.specHistory(s.id)).toHaveLength(1);
-    db.run("DROP TRIGGER reject_version");
+    db.exec("DROP TRIGGER reject_version");
     expect(create().id).toBe("gig-s2");
   } finally { db.close(); }
 });
@@ -117,17 +117,17 @@ test("migration 5 backfills the current v4 state at version 1 using its creator 
   store.readySpec(first.id, "a");
   store.createGig("gig", "a", { title: "linked", spec: first.id });
   store.dispose();
-  const db = new Database(path);
-  db.run("DROP TABLE tokens; ALTER TABLE specs DROP COLUMN state; ALTER TABLE specs DROP COLUMN close_reason; ALTER TABLE specs DROP COLUMN closed_by; ALTER TABLE specs DROP COLUMN closed_at; ALTER TABLE gigs DROP COLUMN human; DROP TABLE labels; DROP TABLE spec_versions; ALTER TABLE specs DROP COLUMN version; PRAGMA user_version = 4;");
+  const db = openSql(path);
+  db.exec("DROP TABLE tokens; ALTER TABLE specs DROP COLUMN state; ALTER TABLE specs DROP COLUMN close_reason; ALTER TABLE specs DROP COLUMN closed_by; ALTER TABLE specs DROP COLUMN closed_at; ALTER TABLE gigs DROP COLUMN human; DROP TABLE labels; DROP TABLE spec_versions; ALTER TABLE specs DROP COLUMN version;"); db.setVersion(4);
   db.close();
-  store = new Store({ path });
+  store = openStore(path);
   expect(store.getSpec(first.id)).toEqual({ ...first, title: "Current", text: "Current text", status: "active" });
   expect(store.getSpec(first.id, 1)).toEqual(store.getSpec(first.id));
   expect(store.specHistory(first.id)).toEqual([{ version: 1, by: "alice", at, kind: "create" }]);
   expect(store.getGig("gig-1").spec).toBe(first.id);
   expect(store.updateSpec(first.id, "carol", { title: "Next" }).version).toBe(2);
   store.dispose();
-  store = new Store({ path });
+  store = openStore(path);
   expect(store.specHistory(first.id)).toHaveLength(2);
   expect(create().id).toBe("gig-s2");
 });

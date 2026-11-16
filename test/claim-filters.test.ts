@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GigsError, Store, type ClaimFilter } from "../src/store";
+import { openStore } from "./harness";
 
 // Claim-next takes ready's filters; --parent on ready and claim-next means the whole subtree.
 
@@ -11,7 +12,7 @@ let store: Store;
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "gigs-claim-filters-"));
-  store = new Store({ path: join(dir, "gigs.db") });
+  store = openStore(join(dir, "gigs.db"));
   store.createProject("gig");
 });
 afterEach(() => { store.dispose(); rmSync(dir, { recursive: true, force: true }); });

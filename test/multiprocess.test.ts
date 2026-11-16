@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../src/store";
+import { openStore } from "./harness";
 
 const CLAIMER = join(import.meta.dir, "fixtures", "claimer.ts");
 const PROCESSES = 4;
@@ -23,7 +24,7 @@ test(
   async () => {
     const path = join(dir, "gigs.db");
     const goFile = join(dir, "go");
-    const seed = new Store({ path });
+    const seed = openStore(path);
     seed.createProject("gig");
     for (let i = 0; i < GIGS; i++) seed.createGig("gig", "seed", { title: `gig ${i}` });
     seed.dispose();
@@ -58,7 +59,7 @@ test(
     // The claimers really interleaved: more than one process got work.
     expect(perProcess.filter((ids) => ids.length > 0).length).toBeGreaterThan(1);
 
-    const check = new Store({ path });
+    const check = openStore(path);
     expect(check.ready("gig")).toEqual([]);
     check.dispose();
   },

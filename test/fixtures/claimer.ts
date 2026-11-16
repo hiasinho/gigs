@@ -2,12 +2,13 @@
 // the go-file (so all claimers start together), then claims until nothing is ready.
 // Writes <go-file>.<actor> once the store is open, then prints the claimed ids as a JSON array on stdout.
 import { existsSync, writeFileSync } from "node:fs";
+import { BunSql } from "../../src/sql-bun";
 import { Store } from "../../src/store";
 
 const [path, goFile, actor] = process.argv.slice(2);
 if (!path || !goFile || !actor) throw new Error("usage: claimer.ts <db-path> <go-file> <actor>");
 
-const store = new Store({ path });
+const store = new Store({ sql: new BunSql(path) });
 writeFileSync(`${goFile}.${actor}`, "");
 while (!existsSync(goFile)) await Bun.sleep(1);
 

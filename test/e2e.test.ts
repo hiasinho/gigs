@@ -4,12 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHandler } from "../src/server";
 import { Store } from "../src/store";
+import { openStore } from "./harness";
 
 const CLI = join(import.meta.dir, "../src/cli.ts");
 const dir = mkdtempSync(join(tmpdir(), "gigs-e2e-"));
 const repo = join(dir, "repo");
 mkdirSync(join(repo, "sub"), { recursive: true });
-const store = new Store({ path: join(dir, "gigs.db") });
+const store = openStore(join(dir, "gigs.db"));
 const server = Bun.serve({ port: 0, fetch: createHandler(store, { adminToken: "t0k" }) });
 
 afterAll(() => {

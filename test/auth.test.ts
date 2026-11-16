@@ -1,10 +1,10 @@
-import { Database } from "bun:sqlite";
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { configFromEnv, createHandler } from "../src/server";
 import { Store } from "../src/store";
+import { bunDescribe, bunTest, openSql, openStore } from "./harness";
 
 const dir = mkdtempSync(join(tmpdir(), "gigs-auth-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -16,9 +16,12 @@ function call(handle: (req: Request) => Promise<Response>, method: string, path:
 }
 
 describe("store tokens", () => {
-  const store = new Store({ path: join(dir, "store.db") });
-  store.createProject("ab");
-  afterAll(() => store.dispose());
+  let store: Store;
+  beforeEach(() => {
+    store = openStore(join(dir, "store.db"));
+    store.createProject("ab");
+  });
+  afterEach(() => store.dispose());
 
   test("plaintext only on creation, hashed at rest, several per project, revocable", () => {
     const first = store.createToken("AB", "laptop");
@@ -40,17 +43,20 @@ describe("store tokens", () => {
     expect(store.tokenProject(second.token)).toBe("ab");
     expect(() => store.revokeToken(first.id)).toThrow("already revoked");
     expect(() => store.revokeToken(999)).toThrow("not found");
+    expect(() => store.revokeToken("nope")).toThrow("not found");
     expect(() => store.createToken("zz")).toThrow("not found");
     expect(() => store.createToken("ab", 5)).toThrow("label");
 
-    const raw = new Database(join(dir, "store.db")).query("SELECT * FROM tokens").all() as Record<string, unknown>[];
+    const db = openSql(join(dir, "store.db"));
+    const raw = db.all<Record<string, unknown>>("SELECT * FROM tokens");
+    db.close();
     expect(JSON.stringify(raw)).not.toContain(first.token);
     expect(JSON.stringify(raw)).not.toContain(second.token);
   });
 });
 
-describe("auth off (no admin token)", () => {
-  const store = new Store({ path: join(dir, "off.db") });
+bunDescribe("auth off (no admin token)", () => {
+  const store = openStore(join(dir, "off.db"));
   const handle = createHandler(store);
   afterAll(() => store.dispose());
 
@@ -62,8 +68,8 @@ describe("auth off (no admin token)", () => {
   });
 });
 
-describe("auth on (admin token)", () => {
-  const store = new Store({ path: join(dir, "on.db") });
+bunDescribe("auth on (admin token)", () => {
+  const store = openStore(join(dir, "on.db"));
   const handle = createHandler(store, { adminToken: "adm1n" });
   store.createProject("ab");
   store.createProject("cd");
@@ -164,15 +170,15 @@ describe("auth on (admin token)", () => {
   });
 });
 
-test("config: GIGS_ADMIN_TOKEN turns auth on; a leftover server GIGS_TOKEN fails closed", () => {
+bunTest("config: GIGS_ADMIN_TOKEN turns auth on; a leftover server GIGS_TOKEN fails closed", () => {
   expect(configFromEnv({ GIGS_ADMIN_TOKEN: "x" }).adminToken).toBe("x");
   expect(configFromEnv({}).adminToken).toBeUndefined();
   expect(() => configFromEnv({ GIGS_TOKEN: "old" })).toThrow("GIGS_ADMIN_TOKEN");
   expect(configFromEnv({ GIGS_TOKEN: "client", GIGS_ADMIN_TOKEN: "x" }).adminToken).toBe("x");
 });
 
-describe("CLI", () => {
-  const store = new Store({ path: join(dir, "cli.db") });
+bunDescribe("CLI", () => {
+  const store = openStore(join(dir, "cli.db"));
   const server = Bun.serve({ port: 0, fetch: createHandler(store, { adminToken: "adm1n" }) });
   const repo = join(dir, "repo");
   mkdirSync(join(repo, "sub"), { recursive: true });
@@ -225,7 +231,7 @@ describe("CLI", () => {
   });
 
   test("auth off: init writes no token", async () => {
-    const offStore = new Store({ path: join(dir, "cli-off.db") });
+    const offStore = openStore(join(dir, "cli-off.db"));
     const off = Bun.serve({ port: 0, fetch: createHandler(offStore) });
     const offRepo = join(dir, "off-repo");
     mkdirSync(offRepo);

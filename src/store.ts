@@ -1,5 +1,5 @@
-import { Database } from "bun:sqlite";
 import { createHash, randomBytes } from "node:crypto";
+import type { Sql } from "./sql";
 
 export const TYPES = ["bug", "feature", "task", "epic", "chore"] as const;
 export const STATUSES = ["open", "in_progress", "deferred", "closed"] as const;
@@ -330,31 +330,32 @@ export const LABEL_RE = /^[a-z0-9][a-z0-9._:-]*$/;
 export const LABEL_MAX = 50;
 
 export interface StoreOptions {
-  path: string;
+  /** The database; the store owns it from here on (dispose closes it). See sql-bun.ts and sql-do.ts. */
+  sql: Sql;
   now?: () => Date;
   /** How long a claim lasts without activity by its holder. Default 60. */
   claimTtlMinutes?: number;
 }
 
 export class Store {
-  private db: Database;
+  private sql: Sql;
   private now: () => Date;
   private ttlMs: number;
 
-  constructor({ path, now = () => new Date(), claimTtlMinutes = 60 }: StoreOptions) {
-    if (!validClaimTtl(claimTtlMinutes, now().getTime())) throw new Error(`claim TTL must be positive and produce a four-digit-year expiry, got ${claimTtlMinutes}`);
+  constructor({ sql, now = () => new Date(), claimTtlMinutes = 60 }: StoreOptions) {
+    if (!validClaimTtl(claimTtlMinutes, now().getTime())) {
+      sql.close();
+      throw new Error(`claim TTL must be positive and produce a four-digit-year expiry, got ${claimTtlMinutes}`);
+    }
     this.now = now;
     this.ttlMs = claimTtlMinutes * 60_000;
-    this.db = new Database(path, { create: true, strict: true });
-    this.db.run("PRAGMA busy_timeout = 5000");
-    this.db.run("PRAGMA journal_mode = WAL");
-    this.db.run("PRAGMA foreign_keys = ON");
-    this.db.transaction(() => this.migrate()).immediate();
+    this.sql = sql;
+    this.sql.transaction(() => this.migrate());
   }
 
   /** Closes the database connection. */
   dispose() {
-    this.db.close();
+    this.sql.close();
   }
 
   // --- projects ---
@@ -369,16 +370,14 @@ export class Store {
         throw badRequest("name must be a string");
       }
       if (this.findProject(p)) throw conflict(`project ${p} already exists`);
-      this.db
-        .query("INSERT INTO projects (prefix, name, created_at) VALUES (?, ?, ?)")
-        .run(p, name?.trim() || p, this.timestamp());
+      this.sql.run("INSERT INTO projects (prefix, name, created_at) VALUES (?, ?, ?)", p, name?.trim() || p, this.timestamp());
       return this.findProject(p)!;
     });
   }
 
   listProjects(): Project[] {
     return this.op(() =>
-      this.db.query(`SELECT ${PROJECT_COLUMNS} FROM projects ORDER BY prefix`).all() as Project[],
+      this.sql.all(`SELECT ${PROJECT_COLUMNS} FROM projects ORDER BY prefix`) as Project[],
     );
   }
 
@@ -394,9 +393,7 @@ export class Store {
       const p = this.mustGetProject(project);
       if (label !== undefined && label !== null && typeof label !== "string") throw badRequest("label must be a string");
       const token = `gig_${randomBytes(32).toString("base64url")}`;
-      const row = this.db
-        .query(`INSERT INTO tokens (project, hash, label, created_at) VALUES (?, ?, ?, ?) RETURNING ${TOKEN_COLUMNS}`)
-        .get(p.prefix, sha256(token), label?.trim() || null, this.timestamp()) as Token;
+      const row = this.sql.get(`INSERT INTO tokens (project, hash, label, created_at) VALUES (?, ?, ?, ?) RETURNING ${TOKEN_COLUMNS}`, p.prefix, sha256(token), label?.trim() || null, this.timestamp()) as Token;
       return { ...row, token };
     });
   }
@@ -404,24 +401,22 @@ export class Store {
   /** All tokens of a project, revoked ones included. */
   listTokens(project: string): Token[] {
     return this.op(() =>
-      this.db.query(`SELECT ${TOKEN_COLUMNS} FROM tokens WHERE project = ? ORDER BY id`).all(this.mustGetProject(project).prefix) as Token[],
+      this.sql.all(`SELECT ${TOKEN_COLUMNS} FROM tokens WHERE project = ? ORDER BY id`, this.mustGetProject(project).prefix) as Token[],
     );
   }
 
   revokeToken(id: unknown): Token {
     return this.op(() => {
-      const token = this.db.query(`SELECT ${TOKEN_COLUMNS} FROM tokens WHERE id = ?`).get(Number(id)) as Token | null;
+      const token = this.sql.get(`SELECT ${TOKEN_COLUMNS} FROM tokens WHERE id = ?`, Number(id)) as Token | null;
       if (!token) throw notFound(`token ${id} not found`);
       if (token.revoked_at) throw conflict(`token ${token.id} is already revoked`);
-      return this.db
-        .query(`UPDATE tokens SET revoked_at = ? WHERE id = ? RETURNING ${TOKEN_COLUMNS}`)
-        .get(this.timestamp(), token.id) as Token;
+      return this.sql.get(`UPDATE tokens SET revoked_at = ? WHERE id = ? RETURNING ${TOKEN_COLUMNS}`, this.timestamp(), token.id) as Token;
     });
   }
 
   /** The project a valid (unrevoked) token belongs to, or null. */
   tokenProject(token: string): string | null {
-    const row = this.db.query("SELECT project FROM tokens WHERE hash = ? AND revoked_at IS NULL").get(sha256(token)) as { project: string } | null;
+    const row = this.sql.get("SELECT project FROM tokens WHERE hash = ? AND revoked_at IS NULL", sha256(token)) as { project: string } | null;
     return row?.project ?? null;
   }
 
@@ -449,18 +444,12 @@ export class Store {
       const deferUntil = this.deferUntil(input.defer_until);
       const deferred = input.defer === true || deferUntil !== null;
 
-      const { next_number: n } = this.db
-        .query("UPDATE projects SET next_number = next_number + 1 WHERE prefix = ? RETURNING next_number - 1 AS next_number")
-        .get(p.prefix) as { next_number: number };
+      const { next_number: n } = this.sql.get("UPDATE projects SET next_number = next_number + 1 WHERE prefix = ? RETURNING next_number - 1 AS next_number", p.prefix) as { next_number: number };
       const id = `${p.prefix}-${n}`;
       const now = this.timestamp();
-      this.db
-        .query(
-          `INSERT INTO gigs (id, project, number, title, description, type, priority, status, defer_until, created_by, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(id, p.prefix, n, title, description, type, priority, deferred ? "deferred" : "open", deferUntil, actor, now, now);
-      this.db.query("UPDATE gigs SET parent = ?, spec = ?, human = ? WHERE id = ?").run(parent, spec, human ? 1 : 0, id);
+      this.sql.run(`INSERT INTO gigs (id, project, number, title, description, type, priority, status, defer_until, created_by, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, p.prefix, n, title, description, type, priority, deferred ? "deferred" : "open", deferUntil, actor, now, now);
+      this.sql.run("UPDATE gigs SET parent = ?, spec = ?, human = ? WHERE id = ?", parent, spec, human ? 1 : 0, id);
       for (const target of blockers) this.insertLink(id, target, "blocks");
       if (discovered) this.insertLink(id, discovered, "discovered-from");
       this.changeLabels(id, labels, []);
@@ -483,7 +472,7 @@ export class Store {
         .map(summary);
       const outgoing = (kind: LinkKind) => graph.links.filter((l) => l.gig_id === gig.id && l.kind === kind).map((l) => l.target_id);
       const incoming = (kind: LinkKind) => graph.links.filter((l) => l.target_id === gig.id && l.kind === kind).map((l) => l.gig_id);
-      const comments = this.db.query(`SELECT ${COMMENT_COLUMNS} FROM comments WHERE gig_id = ? ORDER BY id`).all(gig.id) as Comment[];
+      const comments = this.sql.all(`SELECT ${COMMENT_COLUMNS} FROM comments WHERE gig_id = ? ORDER BY id`, gig.id) as Comment[];
       return {
         gig, ...this.readiness(gig, graph),
         parent: gig.parent ? summary(graph.gigs.get(gig.parent)!) : null,
@@ -521,7 +510,7 @@ export class Store {
       if (both.length) throw badRequest(`cannot both add and remove label ${both.join(", ")}`);
       const keys = Object.keys(sets);
       if (!keys.length && !add && !remove) throw badRequest(`nothing to update; give at least one of ${CHANGEABLE.join(", ")}`);
-      if (keys.length) this.db.query(`UPDATE gigs SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`).run(...Object.values(sets), gig.id);
+      if (keys.length) this.sql.run(`UPDATE gigs SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`, ...Object.values(sets), gig.id);
       this.changeLabels(gig.id, add ?? [], remove ?? []);
       if ("parent" in sets) this.checkCycles();
       this.touch(gig, actor);
@@ -535,7 +524,7 @@ export class Store {
       actor = checkActor(actor);
       const gig = this.mustGet(id);
       const description = applyEdits(gig.description, edits);
-      this.db.query("UPDATE gigs SET description = ? WHERE id = ?").run(description, gig.id);
+      this.sql.run("UPDATE gigs SET description = ? WHERE id = ?", description, gig.id);
       this.touch(gig, actor);
       return this.mustGet(gig.id);
     });
@@ -546,9 +535,7 @@ export class Store {
       actor = checkActor(actor);
       const gig = this.mustGet(id);
       if (typeof body !== "string" || !body.trim()) throw badRequest("comment body is required");
-      const comment = this.db
-        .query(`INSERT INTO comments (gig_id, author, body, created_at) VALUES (?, ?, ?, ?) RETURNING ${COMMENT_COLUMNS}`)
-        .get(gig.id, actor, body.trim(), this.timestamp()) as Comment;
+      const comment = this.sql.get(`INSERT INTO comments (gig_id, author, body, created_at) VALUES (?, ?, ?, ?) RETURNING ${COMMENT_COLUMNS}`, gig.id, actor, body.trim(), this.timestamp()) as Comment;
       this.touch(gig, actor);
       return comment;
     });
@@ -622,9 +609,9 @@ export class Store {
       const targetId = this.reference(target);
       const linkKind = checkLinkKind(kind);
       if (gig.id === targetId) throw badRequest("a gig cannot link to itself");
-      this.db.query("DELETE FROM links WHERE gig_id = ? AND target_id = ? AND kind = ?").run(gig.id, targetId, linkKind);
+      this.sql.run("DELETE FROM links WHERE gig_id = ? AND target_id = ? AND kind = ?", gig.id, targetId, linkKind);
       if (linkKind === "related") {
-        this.db.query("DELETE FROM links WHERE gig_id = ? AND target_id = ? AND kind = ?").run(targetId, gig.id, linkKind);
+        this.sql.run("DELETE FROM links WHERE gig_id = ? AND target_id = ? AND kind = ?", targetId, gig.id, linkKind);
       }
       this.touch(gig, actor);
       return this.getDetail(gig.id);
@@ -639,13 +626,9 @@ export class Store {
       const p = this.mustGetProject(project);
       const title = checkTitle(input.title);
       const text = checkSpecText(input.text);
-      const { n } = this.db
-        .query("UPDATE projects SET next_spec_number = next_spec_number + 1 WHERE prefix = ? RETURNING next_spec_number - 1 AS n")
-        .get(p.prefix) as { n: number };
+      const { n } = this.sql.get("UPDATE projects SET next_spec_number = next_spec_number + 1 WHERE prefix = ? RETURNING next_spec_number - 1 AS n", p.prefix) as { n: number };
       const id = `${p.prefix}-s${n}`;
-      this.db
-        .query("INSERT INTO specs (id, project, number, title, text, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-        .run(id, p.prefix, n, title, text, actor, this.timestamp());
+      this.sql.run("INSERT INTO specs (id, project, number, title, text, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", id, p.prefix, n, title, text, actor, this.timestamp());
       const spec = this.mustGetSpec(id);
       this.recordSpecVersion(spec, actor, "create", null, spec.created_at);
       return spec;
@@ -668,7 +651,7 @@ export class Store {
       const title = sets.title ?? spec.title;
       const text = sets.text ?? spec.text;
       if (title === spec.title && text === spec.text) return spec;
-      this.db.query("UPDATE specs SET title = ?, text = ?, version = version + 1 WHERE id = ?").run(title, text, spec.id);
+      this.sql.run("UPDATE specs SET title = ?, text = ?, version = version + 1 WHERE id = ?", title, text, spec.id);
       const updated = this.mustGetSpec(spec.id);
       this.recordSpecVersion(updated, actor, "update", {
         ...(title !== spec.title ? { title } : {}),
@@ -682,7 +665,7 @@ export class Store {
   listSpecs(project: string, filter: { all?: boolean } = {}): Spec[] {
     return this.op(() => {
       const where = filter.all ? "" : ` AND (${SPEC_STATUS}) NOT IN ('done', 'closed')`;
-      return this.db.query(`SELECT ${SPEC_COLUMNS} FROM specs WHERE project = ?${where} ORDER BY number`).all(this.mustGetProject(project).prefix) as Spec[];
+      return this.sql.all(`SELECT ${SPEC_COLUMNS} FROM specs WHERE project = ?${where} ORDER BY number`, this.mustGetProject(project).prefix) as Spec[];
     });
   }
 
@@ -695,7 +678,7 @@ export class Store {
       const spec = this.mustGetSpec(id);
       if (spec.state === "closed") throw conflict(`spec ${spec.id} is closed; reopen it first: gig spec reopen ${spec.id}`, "spec_closed");
       if (spec.state === "ready") return spec;
-      this.db.query("UPDATE specs SET state = 'ready' WHERE id = ?").run(spec.id);
+      this.sql.run("UPDATE specs SET state = 'ready' WHERE id = ?", spec.id);
       return this.mustGetSpec(spec.id);
     });
   }
@@ -707,12 +690,11 @@ export class Store {
       if (typeof reason !== "string" || !reason.trim()) throw badRequest("reason is required");
       const spec = this.mustGetSpec(id);
       if (spec.state === "closed") throw conflict(`spec ${spec.id} is already closed`);
-      const unfinished = this.db.query("SELECT id FROM gigs WHERE spec = ? AND status != 'closed' ORDER BY number").all(spec.id) as { id: string }[];
+      const unfinished = this.sql.all("SELECT id FROM gigs WHERE spec = ? AND status != 'closed' ORDER BY number", spec.id) as { id: string }[];
       if (unfinished.length) {
         throw conflict(`spec ${spec.id} has unfinished gigs: ${unfinished.map((g) => g.id).join(", ")}; close them or clear their spec (gig update <id> --spec none) first`, "spec_active");
       }
-      this.db.query("UPDATE specs SET state = 'closed', close_reason = ?, closed_by = ?, closed_at = ? WHERE id = ?")
-        .run(reason.trim(), actor, this.timestamp(), spec.id);
+      this.sql.run("UPDATE specs SET state = 'closed', close_reason = ?, closed_by = ?, closed_at = ? WHERE id = ?", reason.trim(), actor, this.timestamp(), spec.id);
       return this.mustGetSpec(spec.id);
     });
   }
@@ -723,7 +705,7 @@ export class Store {
       checkActor(actor);
       const spec = this.mustGetSpec(id);
       if (spec.state !== "closed") throw conflict(`spec ${spec.id} is not closed`);
-      this.db.query("UPDATE specs SET state = 'draft', close_reason = NULL, closed_by = NULL, closed_at = NULL WHERE id = ?").run(spec.id);
+      this.sql.run("UPDATE specs SET state = 'draft', close_reason = NULL, closed_by = NULL, closed_at = NULL WHERE id = ?", spec.id);
       return this.mustGetSpec(spec.id);
     });
   }
@@ -733,7 +715,7 @@ export class Store {
       const spec = this.mustGetSpec(id);
       if (version === undefined) return spec;
       if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 1) throw badRequest("version must be a positive integer");
-      const snapshot = this.db.query("SELECT title, text, version FROM spec_versions WHERE spec_id = ? AND version = ?").get(spec.id, version) as Pick<Spec, "title" | "text" | "version"> | null;
+      const snapshot = this.sql.get("SELECT title, text, version FROM spec_versions WHERE spec_id = ? AND version = ?", spec.id, version) as Pick<Spec, "title" | "text" | "version"> | null;
       if (!snapshot) throw notFound(`spec ${spec.id} version ${version} not found`);
       return { ...spec, ...snapshot };
     });
@@ -746,7 +728,7 @@ export class Store {
       const text = applyEdits(spec.text, edits);
       checkSpecText(text);
       if (text === spec.text) return spec;
-      this.db.query("UPDATE specs SET text = ?, version = version + 1 WHERE id = ?").run(text, spec.id);
+      this.sql.run("UPDATE specs SET text = ?, version = version + 1 WHERE id = ?", text, spec.id);
       const updated = this.mustGetSpec(spec.id);
       this.recordSpecVersion(updated, actor, "edit", { edits });
       return updated;
@@ -756,14 +738,13 @@ export class Store {
   specHistory(id: string): SpecHistory[] {
     return this.op(() => {
       const spec = this.mustGetSpec(id);
-      const rows = this.db.query("SELECT version, changed_by AS by, changed_at AS at, kind, change FROM spec_versions WHERE spec_id = ? ORDER BY version").all(spec.id) as (SpecHistory & { change: string | null })[];
+      const rows = this.sql.all("SELECT version, changed_by AS by, changed_at AS at, kind, change FROM spec_versions WHERE spec_id = ? ORDER BY version", spec.id) as (SpecHistory & { change: string | null })[];
       return rows.map(({ change, ...row }) => ({ ...row, ...(change === null ? {} : JSON.parse(change)) }));
     });
   }
 
   private recordSpecVersion(spec: Spec, actor: string, kind: SpecHistory["kind"], change: Record<string, unknown> | null, at = this.timestamp()) {
-    this.db.query("INSERT INTO spec_versions (spec_id, version, title, text, kind, change, changed_by, changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(spec.id, spec.version, spec.title, spec.text, kind, change === null ? null : JSON.stringify(change), actor, at);
+    this.sql.run("INSERT INTO spec_versions (spec_id, version, title, text, kind, change, changed_by, changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", spec.id, spec.version, spec.title, spec.text, kind, change === null ? null : JSON.stringify(change), actor, at);
   }
 
   // --- claims ---
@@ -814,9 +795,7 @@ export class Store {
       actor = checkActor(actor);
       const gig = this.mustGet(id);
       if (gig.status !== "in_progress") throw conflict(`${gig.id} is not claimed`);
-      this.db
-        .query(`UPDATE gigs SET status = 'open', ${CLEAR_CLAIM}, updated_at = ? WHERE id = ?`)
-        .run(this.timestamp(), gig.id);
+      this.sql.run(`UPDATE gigs SET status = 'open', ${CLEAR_CLAIM}, updated_at = ? WHERE id = ?`, this.timestamp(), gig.id);
       return this.mustGet(gig.id);
     });
   }
@@ -832,15 +811,11 @@ export class Store {
       const gig = this.mustGet(id);
       if (gig.status === "closed") throw conflict(`${gig.id} is already closed`);
       if (typeof force !== "boolean") throw badRequest("force must be a boolean");
-      const children = this.db.query("SELECT id FROM gigs WHERE parent = ? AND status != 'closed'").all(gig.id) as { id: string }[];
+      const children = this.sql.all("SELECT id FROM gigs WHERE parent = ? AND status != 'closed'", gig.id) as { id: string }[];
       if (!force && children.length) throw conflict(`${gig.id} has unfinished children: ${children.map((c) => c.id).join(", ")}`, "has_open_children");
       const now = this.timestamp();
-      this.db
-        .query(
-          `UPDATE gigs SET status = 'closed', ${CLEAR_CLAIM}, defer_until = NULL,
-             closed_by = ?, closed_at = ?, close_reason = ?, updated_at = ? WHERE id = ?`,
-        )
-        .run(actor, now, reason?.trim() || null, now, gig.id);
+      this.sql.run(`UPDATE gigs SET status = 'closed', ${CLEAR_CLAIM}, defer_until = NULL,
+             closed_by = ?, closed_at = ?, close_reason = ?, updated_at = ? WHERE id = ?`, actor, now, reason?.trim() || null, now, gig.id);
       return this.mustGet(gig.id);
     });
   }
@@ -849,12 +824,8 @@ export class Store {
     return this.op(() => {
       const gig = this.mustGet(id);
       if (gig.status !== "closed") throw conflict(`${gig.id} is not closed`);
-      this.db
-        .query(
-          `UPDATE gigs SET status = 'open', closed_by = NULL, closed_at = NULL, close_reason = NULL,
-             updated_at = ? WHERE id = ?`,
-        )
-        .run(this.timestamp(), gig.id);
+      this.sql.run(`UPDATE gigs SET status = 'open', closed_by = NULL, closed_at = NULL, close_reason = NULL,
+             updated_at = ? WHERE id = ?`, this.timestamp(), gig.id);
       return this.mustGet(gig.id);
     });
   }
@@ -868,9 +839,7 @@ export class Store {
       const gig = this.mustGet(id);
       if (gig.status === "closed") throw conflict(`${gig.id} is closed and cannot be deferred`);
       const deferUntil = this.deferUntil(until);
-      this.db
-        .query(`UPDATE gigs SET status = 'deferred', ${CLEAR_CLAIM}, defer_until = ?, updated_at = ? WHERE id = ?`)
-        .run(deferUntil, this.timestamp(), gig.id);
+      this.sql.run(`UPDATE gigs SET status = 'deferred', ${CLEAR_CLAIM}, defer_until = ?, updated_at = ? WHERE id = ?`, deferUntil, this.timestamp(), gig.id);
       return this.mustGet(gig.id);
     });
   }
@@ -880,7 +849,7 @@ export class Store {
       actor = checkActor(actor);
       const gig = this.mustGet(id);
       if (gig.status !== "deferred") throw conflict(`${gig.id} is not deferred`);
-      this.db.query("UPDATE gigs SET status = 'open', defer_until = NULL, updated_at = ? WHERE id = ?").run(this.timestamp(), gig.id);
+      this.sql.run("UPDATE gigs SET status = 'open', defer_until = NULL, updated_at = ? WHERE id = ?", this.timestamp(), gig.id);
       return this.mustGet(gig.id);
     });
   }
@@ -896,37 +865,33 @@ export class Store {
     return date.toISOString();
   }
 
-  /** Every store operation runs in its own IMMEDIATE transaction, after applying lapsed claims and defers. */
+  /** Every store operation runs in its own write transaction (IMMEDIATE on Bun), after applying lapsed claims and defers. */
   private op<T>(fn: () => T): T {
-    return this.db.transaction(() => {
+    return this.sql.transaction(() => {
       this.applyTimeTransitions();
       return fn();
-    }).immediate();
+    });
   }
 
   /** Lazy time-based transitions; each takes effect (updated_at) at the moment it lapsed. */
   private applyTimeTransitions() {
     const now = this.timestamp();
-    this.db
-      .query(`UPDATE gigs SET status = 'open', ${CLEAR_CLAIM}, updated_at = claim_expires_at
-              WHERE status = 'in_progress' AND claim_expires_at <= ?`)
-      .run(now);
-    this.db
-      .query(`UPDATE gigs SET status = 'open', defer_until = NULL, updated_at = defer_until
-              WHERE status = 'deferred' AND defer_until <= ?`)
-      .run(now);
+    this.sql.run(`UPDATE gigs SET status = 'open', ${CLEAR_CLAIM}, updated_at = claim_expires_at
+              WHERE status = 'in_progress' AND claim_expires_at <= ?`, now);
+    this.sql.run(`UPDATE gigs SET status = 'open', defer_until = NULL, updated_at = defer_until
+              WHERE status = 'deferred' AND defer_until <= ?`, now);
   }
 
   private migrate() {
-    const { user_version } = this.db.query("PRAGMA user_version").get() as { user_version: number };
-    if (user_version > MIGRATIONS.length) {
-      throw new Error(`database schema version ${user_version} is newer than this gigs (${MIGRATIONS.length})`);
+    const version = this.sql.version();
+    if (version > MIGRATIONS.length) {
+      throw new Error(`database schema version ${version} is newer than this gigs (${MIGRATIONS.length})`);
     }
-    if (user_version === MIGRATIONS.length) return;
-    for (const sql of MIGRATIONS.slice(user_version)) this.db.run(sql);
-    this.db.run(`PRAGMA user_version = ${MIGRATIONS.length}`);
+    if (version === MIGRATIONS.length) return;
+    for (const sql of MIGRATIONS.slice(version)) this.sql.exec(sql);
+    this.sql.setVersion(MIGRATIONS.length);
     // Claims from before claim expiry existed get a full TTL from now rather than lapsing at once.
-    this.db.query("UPDATE gigs SET claim_expires_at = ? WHERE status = 'in_progress' AND claim_expires_at IS NULL").run(this.expiry());
+    this.sql.run("UPDATE gigs SET claim_expires_at = ? WHERE status = 'in_progress' AND claim_expires_at IS NULL", this.expiry());
   }
 
   private timestamp() {
@@ -938,20 +903,18 @@ export class Store {
   }
 
   private renew(id: string): Gig {
-    this.db.query("UPDATE gigs SET claim_expires_at = ? WHERE id = ?").run(this.expiry(), id);
+    this.sql.run("UPDATE gigs SET claim_expires_at = ? WHERE id = ?", this.expiry(), id);
     return this.mustGet(id);
   }
 
   /** Records a change to the gig; activity by the claim holder renews the claim. */
   private touch(gig: Gig, actor: string) {
-    this.db.query("UPDATE gigs SET updated_at = ? WHERE id = ?").run(this.timestamp(), gig.id);
+    this.sql.run("UPDATE gigs SET updated_at = ? WHERE id = ?", this.timestamp(), gig.id);
     if (gig.status === "in_progress" && gig.claimed_by === actor) this.renew(gig.id);
   }
 
   private findProject(prefix: string): Project | null {
-    return this.db
-      .query(`SELECT ${PROJECT_COLUMNS} FROM projects WHERE prefix = ?`)
-      .get(prefix.trim().toLowerCase()) as Project | null;
+    return this.sql.get(`SELECT ${PROJECT_COLUMNS} FROM projects WHERE prefix = ?`, prefix.trim().toLowerCase()) as Project | null;
   }
 
   private mustGetProject(prefix: string): Project {
@@ -968,14 +931,14 @@ export class Store {
 
   /** Runs a query selecting GIG_COLUMNS, decoding each gig's labels and human flag. */
   private gigs(sql: string, ...params: (string | number)[]): Gig[] {
-    const rows = this.db.query(sql).all(...params) as (Omit<Gig, "labels" | "human"> & { labels: string; human: number })[];
+    const rows = this.sql.all(sql, ...params) as (Omit<Gig, "labels" | "human"> & { labels: string; human: number })[];
     return rows.map((row) => ({ ...row, human: row.human === 1, labels: (JSON.parse(row.labels) as string[]).sort() }));
   }
 
   /** Adding a present label or removing a missing one is a no-op. */
   private changeLabels(id: string, add: string[], remove: string[]) {
-    for (const label of add) this.db.query("INSERT OR IGNORE INTO labels (gig_id, label) VALUES (?, ?)").run(id, label);
-    for (const label of remove) this.db.query("DELETE FROM labels WHERE gig_id = ? AND label = ?").run(id, label);
+    for (const label of add) this.sql.run("INSERT OR IGNORE INTO labels (gig_id, label) VALUES (?, ?)", id, label);
+    for (const label of remove) this.sql.run("DELETE FROM labels WHERE gig_id = ? AND label = ?", id, label);
   }
 
   private reference(id: unknown): string {
@@ -984,7 +947,7 @@ export class Store {
   }
 
   private mustGetSpec(id: string): Spec {
-    const spec = this.db.query(`SELECT ${SPEC_COLUMNS} FROM specs WHERE id = ?`).get(id.trim().toLowerCase()) as Spec | null;
+    const spec = this.sql.get(`SELECT ${SPEC_COLUMNS} FROM specs WHERE id = ?`, id.trim().toLowerCase()) as Spec | null;
     if (!spec) throw notFound(`spec ${id} not found`);
     return spec;
   }
@@ -1014,13 +977,13 @@ export class Store {
 
   private insertLink(id: string, target: string, kind: LinkKind) {
     if (id === target) throw badRequest("a gig cannot link to itself");
-    if (kind === "related" && this.db.query("SELECT 1 FROM links WHERE gig_id = ? AND target_id = ? AND kind = 'related'").get(target, id)) return;
-    this.db.query("INSERT OR IGNORE INTO links (gig_id, target_id, kind) VALUES (?, ?, ?)").run(id, target, kind);
+    if (kind === "related" && this.sql.get("SELECT 1 FROM links WHERE gig_id = ? AND target_id = ? AND kind = 'related'", target, id)) return;
+    this.sql.run("INSERT OR IGNORE INTO links (gig_id, target_id, kind) VALUES (?, ?, ?)", id, target, kind);
   }
 
   private graph(): Graph {
     const gigs = this.gigs(`SELECT ${GIG_COLUMNS} FROM gigs ORDER BY id`);
-    return { gigs: new Map(gigs.map((b) => [b.id, b])), links: this.db.query("SELECT * FROM links ORDER BY gig_id, target_id, kind").all() as Link[] };
+    return { gigs: new Map(gigs.map((b) => [b.id, b])), links: this.sql.all("SELECT * FROM links ORDER BY gig_id, target_id, kind") as Link[] };
   }
 
   private ancestors(gig: Gig, graph: Graph): Gig[] {
@@ -1107,9 +1070,7 @@ export class Store {
 
   private claimGig(id: string, actor: string): Gig {
     const now = this.timestamp();
-    this.db
-      .query("UPDATE gigs SET status = 'in_progress', claimed_by = ?, claimed_at = ?, claim_expires_at = ?, updated_at = ? WHERE id = ?")
-      .run(actor, now, this.expiry(), now, id);
+    this.sql.run("UPDATE gigs SET status = 'in_progress', claimed_by = ?, claimed_at = ?, claim_expires_at = ?, updated_at = ? WHERE id = ?", actor, now, this.expiry(), now, id);
     return this.mustGet(id);
   }
 }

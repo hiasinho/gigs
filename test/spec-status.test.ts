@@ -1,10 +1,10 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHandler } from "../src/server";
 import { GigsError, Store } from "../src/store";
+import { bunDescribe, openSql, openStore } from "./harness";
 
 // Spec status: stored state (draft|ready|closed) plus status derived from the spec's gigs.
 
@@ -27,7 +27,7 @@ describe("store", () => {
   let n = 0;
   beforeEach(() => {
     path = join(dir, `store-${++n}.db`);
-    store = new Store({ path, now: () => new Date(at) });
+    store = openStore(path, { now: () => new Date(at) });
     store.createProject("gig");
   });
   afterEach(() => store.dispose());
@@ -42,15 +42,15 @@ describe("store", () => {
   test("migration 8 makes existing specs drafts", () => {
     const s = spec();
     store.dispose();
-    const db = new Database(path);
-    db.run("DROP TABLE tokens; ALTER TABLE specs DROP COLUMN state; ALTER TABLE specs DROP COLUMN close_reason; ALTER TABLE specs DROP COLUMN closed_by; ALTER TABLE specs DROP COLUMN closed_at; PRAGMA user_version = 7;");
+    const db = openSql(path);
+    db.exec("DROP TABLE tokens; ALTER TABLE specs DROP COLUMN state; ALTER TABLE specs DROP COLUMN close_reason; ALTER TABLE specs DROP COLUMN closed_by; ALTER TABLE specs DROP COLUMN closed_at;"); db.setVersion(7);
     db.close();
-    store = new Store({ path, now: () => new Date(at) });
+    store = openStore(path, { now: () => new Date(at) });
     expect(store.getSpec(s.id)).toEqual(s);
     expect(store.getSpec(s.id)).toMatchObject({ state: "draft", status: "draft" });
-    const raw = new Database(path);
+    const raw = openSql(path);
     try {
-      expect(raw.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
+      expect(raw.version()).toBe(9);
       expect(() => raw.run("UPDATE specs SET state = 'active'")).toThrow();
     } finally { raw.close(); }
   });
@@ -163,8 +163,8 @@ describe("store", () => {
   });
 });
 
-describe("http and cli", () => {
-  const store = new Store({ path: join(dir, "http.db") });
+bunDescribe("http and cli", () => {
+  const store = openStore(join(dir, "http.db"));
   const server = Bun.serve({ port: 0, fetch: createHandler(store, { adminToken: "t0k" }) });
   const handle = createHandler(store, { adminToken: "t0k" });
   afterAll(() => { server.stop(true); store.dispose(); });

@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GigsError, Store } from "../src/store";
+import { openSql, openStore } from "./harness";
 
 // Labels: free-form, inert markers on gigs, on a fake clock.
 
@@ -19,7 +19,7 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "gigs-labels-"));
   path = join(dir, "gigs.db");
   clock = new Date(T0);
-  store = new Store({ path, now: () => clock, claimTtlMinutes: 30 });
+  store = openStore(path, { now: () => clock, claimTtlMinutes: 30 });
   store.createProject("gig");
 });
 afterEach(() => { store.dispose(); rmSync(dir, { recursive: true, force: true }); });
@@ -140,10 +140,10 @@ describe("migration 6", () => {
     const held = create("held");
     store.claim(held.id, "holder");
     store.dispose();
-    const db = new Database(path);
-    db.run("DROP TABLE tokens; ALTER TABLE specs DROP COLUMN state; ALTER TABLE specs DROP COLUMN close_reason; ALTER TABLE specs DROP COLUMN closed_by; ALTER TABLE specs DROP COLUMN closed_at; ALTER TABLE gigs DROP COLUMN human; DROP TABLE labels; PRAGMA user_version = 5;");
+    const db = openSql(path);
+    db.exec("DROP TABLE tokens; ALTER TABLE specs DROP COLUMN state; ALTER TABLE specs DROP COLUMN close_reason; ALTER TABLE specs DROP COLUMN closed_by; ALTER TABLE specs DROP COLUMN closed_at; ALTER TABLE gigs DROP COLUMN human; DROP TABLE labels;"); db.setVersion(5);
     db.close();
-    store = new Store({ path, now: () => clock, claimTtlMinutes: 30 });
+    store = openStore(path, { now: () => clock, claimTtlMinutes: 30 });
     expect(store.getGig(held.id)).toMatchObject({ title: "held", claimed_by: "holder", labels: [] });
     expect(label(held.id, ["wontfix"]).labels).toEqual(["wontfix"]);
   });

@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { timingSafeEqual } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { BunSql } from "./sql-bun";
 import { GigsError, Store, sha256, validClaimTtl, type ClaimFilter, type GigDetail, type GigSummary, type LabelFilter } from "./store";
 
 const UI_PATH = new URL("./ui.html", import.meta.url).pathname;
@@ -256,7 +257,7 @@ export function configFromEnv(env: Record<string, string | undefined> = process.
 
 export function serve(config: ServerConfig) {
   mkdirSync(dirname(config.db), { recursive: true });
-  const store = new Store({ path: config.db, claimTtlMinutes: config.claimTtlMinutes });
+  const store = new Store({ sql: new BunSql(config.db), claimTtlMinutes: config.claimTtlMinutes });
   return Bun.serve({
     hostname: config.host,
     port: config.port,

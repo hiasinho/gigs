@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHandler } from "../src/server";
 import { GigsError, Store } from "../src/store";
+import { bunDescribe, openStore } from "./harness";
 
 // Creating a gig already deferred: one atomic operation, so it is never open (and claimable) in between.
 
@@ -17,7 +18,7 @@ const at = (offsetMinutes: number) => new Date(Date.parse(T0) + offsetMinutes * 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "gigs-create-defer-"));
   clock = new Date(T0);
-  store = new Store({ path: join(dir, "gigs.db"), now: () => clock, claimTtlMinutes: 30 });
+  store = openStore(join(dir, "gigs.db"), { now: () => clock, claimTtlMinutes: 30 });
   store.createProject("gig");
 });
 afterEach(() => { store.dispose(); rmSync(dir, { recursive: true, force: true }); });
@@ -82,9 +83,9 @@ describe("create deferred", () => {
   });
 });
 
-describe("create deferred over HTTP and the CLI", () => {
+bunDescribe("create deferred over HTTP and the CLI", () => {
   const sdir = mkdtempSync(join(tmpdir(), "gigs-create-defer-cli-"));
-  const s = new Store({ path: join(sdir, "gigs.db") });
+  const s = openStore(join(sdir, "gigs.db"));
   s.createProject("cd");
   const server = Bun.serve({ port: 0, fetch: createHandler(s, { adminToken: "t0k" }) });
   afterAll(() => { server.stop(true); s.dispose(); rmSync(sdir, { recursive: true, force: true }); });

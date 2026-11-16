@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHandler } from "../src/server";
 import { Store, type Gig } from "../src/store";
+import { openStore } from "./harness";
 
 let dir: string;
 let path: string;
@@ -23,8 +24,8 @@ function seed(store: Store, n: number) {
 }
 
 test("two stores on one file never claim the same gig", () => {
-  const a = new Store({ path });
-  const b = new Store({ path });
+  const a = openStore(path);
+  const b = openStore(path);
   seed(a, 30);
   const claimed: string[] = [];
   for (let i = 0; i < 20; i++) {
@@ -41,7 +42,7 @@ test("two stores on one file never claim the same gig", () => {
 });
 
 test("concurrent HTTP claim-next requests across two servers get distinct gigs", async () => {
-  const stores = [new Store({ path }), new Store({ path })];
+  const stores = [openStore(path), openStore(path)];
   seed(stores[0]!, 15);
   const servers = stores.map((store) => Bun.serve({ port: 0, fetch: createHandler(store) }));
   try {

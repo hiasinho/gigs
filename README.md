@@ -310,5 +310,10 @@ silently dropping someone else's change. Text starting with `-` needs `--old=<te
 
 ```sh
 bun install
-bun run check    # tsc --noEmit && bun test
+bun run check    # tsc --noEmit && bun test && bun run test:do
 ```
+
+The store talks SQL through a small synchronous interface ([src/sql.ts](src/sql.ts)) with two adapters:
+bun:sqlite ([src/sql-bun.ts](src/sql-bun.ts), the server's) and a Durable Object's SQLite storage
+([src/sql-do.ts](src/sql-do.ts)). `bun run test:do` runs the store-level tests inside workerd against a real
+Durable Object (vitest with `@cloudflare/vitest-plugin`; tests open databases through `test/harness.ts`).
