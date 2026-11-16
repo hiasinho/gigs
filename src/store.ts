@@ -118,6 +118,10 @@ export interface NewGig {
   spec?: unknown;
   labels?: unknown;
   human?: unknown;
+  /** Create the gig already deferred (implied by `defer_until`). */
+  defer?: unknown;
+  /** With defer: until when (null: until undeferred). */
+  defer_until?: unknown;
 }
 
 export interface NewSpec {
@@ -379,6 +383,10 @@ export class Store {
       const spec = input.spec == null ? null : this.assignableSpec(input.spec, p.prefix);
       const labels = input.labels === undefined ? [] : checkLabels(input.labels, "labels");
       const human = input.human === undefined ? false : checkHuman(input.human);
+      if (input.defer !== undefined && typeof input.defer !== "boolean") throw badRequest("defer must be a boolean");
+      if (input.defer === false && input.defer_until != null) throw badRequest("defer_until requires defer");
+      const deferUntil = this.deferUntil(input.defer_until);
+      const deferred = input.defer === true || deferUntil !== null;
 
       const { next_number: n } = this.db
         .query("UPDATE projects SET next_number = next_number + 1 WHERE prefix = ? RETURNING next_number - 1 AS next_number")
@@ -387,10 +395,10 @@ export class Store {
       const now = this.timestamp();
       this.db
         .query(
-          `INSERT INTO gigs (id, project, number, title, description, type, priority, status, created_by, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)`,
+          `INSERT INTO gigs (id, project, number, title, description, type, priority, status, defer_until, created_by, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(id, p.prefix, n, title, description, type, priority, actor, now, now);
+        .run(id, p.prefix, n, title, description, type, priority, deferred ? "deferred" : "open", deferUntil, actor, now, now);
       this.db.query("UPDATE gigs SET parent = ?, spec = ?, human = ? WHERE id = ?").run(parent, spec, human ? 1 : 0, id);
       for (const target of blockers) this.insertLink(id, target, "blocks");
       if (discovered) this.insertLink(id, discovered, "discovered-from");
@@ -798,13 +806,7 @@ export class Store {
       actor = checkActor(actor);
       const gig = this.mustGet(id);
       if (gig.status === "closed") throw conflict(`${gig.id} is closed and cannot be deferred`);
-      let deferUntil: string | null = null;
-      if (until !== undefined && until !== null) {
-        const date = isoTime(until);
-        if (isNaN(date.getTime()) || date.getUTCFullYear() > 9999) throw badRequest("until must be an ISO-8601 time");
-        if (date <= this.now()) throw badRequest("until must be in the future");
-        deferUntil = date.toISOString();
-      }
+      const deferUntil = this.deferUntil(until);
       this.db
         .query(`UPDATE gigs SET status = 'deferred', ${CLEAR_CLAIM}, defer_until = ?, updated_at = ? WHERE id = ?`)
         .run(deferUntil, this.timestamp(), gig.id);
@@ -823,6 +825,15 @@ export class Store {
   }
 
   // --- internals ---
+
+  /** A defer's end: absent/null means until undeferred; otherwise a future ISO time. */
+  private deferUntil(until: unknown): string | null {
+    if (until === undefined || until === null) return null;
+    const date = isoTime(until);
+    if (isNaN(date.getTime()) || date.getUTCFullYear() > 9999) throw badRequest("until must be an ISO-8601 time");
+    if (date <= this.now()) throw badRequest("until must be in the future");
+    return date.toISOString();
+  }
 
   /** Every store operation runs in its own IMMEDIATE transaction, after applying lapsed claims and defers. */
   private op<T>(fn: () => T): T {

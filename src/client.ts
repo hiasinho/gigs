@@ -17,6 +17,8 @@ export interface NewGigInput {
   spec?: string;
   labels?: string[];
   human?: boolean;
+  defer?: boolean;
+  defer_until?: string;
 }
 
 export interface GigChangesInput {

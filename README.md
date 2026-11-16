@@ -101,6 +101,7 @@ See [GLOSSARY.md](GLOSSARY.md) for the exact vocabulary.
   holder (any update, comment, link change, or `gig heartbeat` renews). Anyone may `unclaim` or
   `close` a gig: the server trusts its clients.
 - **Deferred** gigs are never ready until `gig undefer`, or until their `--until` time passes.
+  `gig create --defer [--until t]` files a gig already deferred, so it is never claimable in between.
 - **Labels** are free-form markers such as `wontfix` or `triage:needs-info`: lowercase letters,
   digits, `.`, `_`, `:` and `-`, starting with a letter or digit, up to 50 characters. They are inert:
   they never change ready, blocked or claiming, but `list`, `ready` and `claim` (no id) can filter by them
@@ -209,7 +210,7 @@ gig comment ws-5 "Stripe." --as alice && gig close ws-5 --as alice   # ws-3 beco
 
 ```
 gig serve                          gig init <prefix> [--name <name>]       gig projects
-gig create <title> [-t type] [-p 0-4] [-d desc|-] [--parent id] [--blocked-by id[,id]] [--discovered-from id] [--spec id] [--label l[,l]] [--human-only]
+gig create <title> [-t type] [-p 0-4] [-d desc|-] [--parent id] [--blocked-by id[,id]] [--discovered-from id] [--spec id] [--label l[,l]] [--human-only] [--defer] [--until t]
 gig list [--all] [--status s[,s]] [--type t] [--parent id] [--spec id] [--label l[,l]] [--exclude-label l[,l]] [--human-only]   # --parent: direct children
 gig ready [--spec id] [--parent id] [--label l[,l]] [--exclude-label l[,l]] [--human-only]   # --parent: whole subtree
 gig blocked [--spec id]            gig show <id> [--full]

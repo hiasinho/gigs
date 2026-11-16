@@ -25,9 +25,10 @@ Lost track (compaction/new session): `gig list --status in_progress`, yours by `
 
 ## File work
 ```
-gig create "<title>" -t bug|feature|task|epic|chore -p 0-4 [--parent id] [--blocked-by id,id] [--discovered-from id] [-d text|-]
+gig create "<title>" -t bug|feature|task|epic|chore -p 0-4 [--parent id] [--blocked-by id,id] [--discovered-from id] [-d text|-] [--defer] [--until t]
 ```
 p0 critical … p4 backlog, default 2. `-d -` reads stdin (heredoc for long text).
+Must not be picked up yet (e.g. untriaged reports)? File it with `--defer` (`--until t` implies it): never claimable in between.
 
 ## Edit descriptions
 Small change → `edit`, not a full `update -d` rewrite: stale edits fail instead of clobbering others' changes.

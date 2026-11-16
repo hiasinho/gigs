@@ -90,8 +90,8 @@ const COMMANDS: Record<string, Command> = {
   },
 
   create: {
-    usage: "create <title> [-t type] [-p 0-4] [-d desc|-] [--parent id] [--blocked-by id[,id]] [--discovered-from id] [--spec id] [--label l[,l]] [--human-only]",
-    summary: "create a gig (`-d -` reads the description from stdin; with --spec, in the spec's project; --human-only: a human gig, never handed out by `gig claim` without an id)",
+    usage: "create <title> [-t type] [-p 0-4] [-d desc|-] [--parent id] [--blocked-by id[,id]] [--discovered-from id] [--spec id] [--label l[,l]] [--human-only] [--defer] [--until <ISO time|YYYY-MM-DD|30m|4h|2d>]",
+    summary: "create a gig (`-d -` reads the description from stdin; with --spec, in the spec's project; --human-only: a human gig, never handed out by `gig claim` without an id; --defer: created deferred, never claimable in between, --until implies it)",
     options: {
       type: { type: "string", short: "t" },
       priority: { type: "string", short: "p" },
@@ -102,10 +102,17 @@ const COMMANDS: Record<string, Command> = {
       spec: { type: "string" },
       label: { type: "string" },
       "human-only": { type: "boolean" },
+      defer: { type: "boolean" },
+      until: { type: "string" },
     },
     async run({ args, values, json, print, client, project }) {
       const title = args.join(" ");
       if (!title.trim()) throw new Error("missing <title>");
+      // `--defer 4h` would otherwise silently append "4h" to the title and defer indefinitely.
+      const afterDefer = process.argv[process.argv.indexOf("--defer") + 1];
+      if (values.defer === true && afterDefer !== undefined && /^(\d+[mhd]|\d{4}-\d{2}-\d{2}\S*)$/.test(afterDefer)) {
+        throw new Error(`--defer takes no value; to defer until ${afterDefer}, use --until ${afterDefer}`);
+      }
       const description = await readText(values.description as string | undefined);
       const gig = await client().createGig(project(), {
         title,
@@ -118,6 +125,8 @@ const COMMANDS: Record<string, Command> = {
         spec: values.spec as string | undefined,
         labels: labelList(values.label),
         human: values["human-only"] === true ? true : undefined,
+        defer: values.defer === true || values.until !== undefined ? true : undefined,
+        defer_until: values.until === undefined ? undefined : parseUntil(values.until as string),
       });
       if (json) return print(gig, row);
       console.log(gig.id);
