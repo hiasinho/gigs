@@ -1,0 +1,82 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gigs</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.5 ui-monospace, monospace; max-width: 52rem; margin: 2rem auto; padding: 0 1rem; }
+  a { color: inherit; }
+  h2 { font-size: 1em; margin: 1.5em 0 .3em; opacity: .6; }
+  ul { list-style: none; padding: 0; margin: 0; }
+  li { padding: .1em 0; }
+  .dim { opacity: .55; }
+  pre { white-space: pre-wrap; margin: .3em 0 1em; }
+</style>
+<nav><a href="#">gigs</a> <span id="crumb"></span></nav>
+<main id="main"></main>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const link = (g) => `<a href="#g/${esc(g.id)}">${esc(g.id)}</a> ${esc(g.title)}`;
+const ago = (t) => (t ? new Date(t).toLocaleString() : "");
+
+async function api(path) {
+  const token = localStorage.getItem("gigs-token");
+  const res = await fetch(path, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (res.status === 401) {
+    const t = prompt("gigs token");
+    if (t) { localStorage.setItem("gigs-token", t); return api(path); }
+  }
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error?.message ?? res.status);
+  return body;
+}
+
+async function projects() {
+  const ps = await api("/projects");
+  return ps.map((p) => `<li><a href="#p/${esc(p.prefix)}">${esc(p.prefix)}</a> ${esc(p.name)}</li>`).join("");
+}
+
+async function project(id) {
+  const [gigs, ready] = await Promise.all([api(`/projects/${id}/gigs?all=1`), api(`/projects/${id}/ready`)]);
+  const readyIds = new Set(ready.map((g) => g.id));
+  const groups = { in_progress: [], ready: [], blocked: [], deferred: [], closed: [] };
+  for (const g of gigs) groups[g.status === "open" ? (readyIds.has(g.id) ? "ready" : "blocked") : g.status].push(g);
+  groups.closed.sort((a, b) => (b.closed_at ?? "").localeCompare(a.closed_at ?? ""));
+  return Object.entries(groups).filter(([, gs]) => gs.length).map(([name, gs]) =>
+    `<h2>${name.replace("_", " ")} (${gs.length})</h2><ul>` +
+    gs.map((g) => `<li>${link(g)} <span class="dim">p${g.priority} ${g.type}${g.human ? " human" : ""}${g.claimed_by ? " @" + esc(g.claimed_by) : ""}${g.labels?.length ? " #" + g.labels.map(esc).join(" #") : ""}</span></li>`).join("") +
+    "</ul>").join("") || "<p class=dim>no gigs</p>";
+}
+
+async function gig(id) {
+  const d = await api(`/gigs/${id}`);
+  const g = d.gig;
+  $("#crumb").innerHTML = `/ <a href="#p/${esc(g.project)}">${esc(g.project)}</a>`;
+  const rel = (name, list) => (list?.length ? `<h2>${name}</h2><ul>${list.map((x) => `<li>${link(x)} <span class=dim>${x.status}</span></li>`).join("")}</ul>` : "");
+  const meta = [g.status, g.type, `p${g.priority}`, g.human && "human", g.claimed_by && `@${g.claimed_by}`, g.spec && `spec ${g.spec}`,
+    ...(g.labels ?? []).map((l) => `#${l}`)].filter(Boolean).map(esc).join(" · ");
+  return `<h1 style="font-size:1.2em">${esc(g.id)} ${esc(g.title)}</h1>
+    <div class=dim>${meta}<br>created ${ago(g.created_at)} by ${esc(g.created_by)}${g.closed_at ? `<br>closed ${ago(g.closed_at)}: ${esc(g.close_reason)}` : ""}</div>
+    ${g.description ? `<pre>${esc(g.description)}</pre>` : ""}
+    ${d.parent ? rel("parent", [d.parent]) : ""}${rel("children", d.children)}${rel("blocked by", d.blockers)}${rel("blocks", d.blocks)}
+    ${rel("related", d.related)}${rel("discovered from", d.discovered_from)}${rel("discovered", d.discovered)}
+    ${d.comments?.length ? `<h2>comments</h2>${d.comments.map((c) => `<div class=dim>${esc(c.author)} · ${ago(c.created_at)}</div><pre>${esc(c.body)}</pre>`).join("")}` : ""}`;
+}
+
+async function render() {
+  const [kind, id] = location.hash.slice(1).split("/").map(decodeURIComponent);
+  $("#crumb").textContent = kind === "p" ? `/ ${id}` : "";
+  try {
+    $("#main").innerHTML = kind === "p" ? await project(encodeURIComponent(id))
+      : kind === "g" ? await gig(encodeURIComponent(id))
+      : `<ul>${await projects()}</ul>`;
+  } catch (e) {
+    $("#main").innerHTML = `<p>error: ${esc(e.message)}</p>`;
+  }
+}
+
+addEventListener("hashchange", render);
+addEventListener("focus", render);
+render();
+</script>

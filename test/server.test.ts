@@ -297,3 +297,10 @@ test("claim-next and ready filters: labels, exclude labels, parent subtree; clai
   expect(await (await post("/projects/cf/claim", { label: ["agent"], parent: null })).json()).toMatchObject({ id: outside });
   expect(await (await post("/projects/cf/claim")).json()).toBeNull();
 });
+
+test("GET / serves the read-only HTML UI without a token", async () => {
+  const res = await call("GET", "/", { token: null });
+  expect(res.status).toBe(200);
+  expect(res.headers.get("content-type")).toContain("text/html");
+  expect(await res.text()).toContain("<title>gigs</title>");
+});

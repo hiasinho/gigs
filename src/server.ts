@@ -3,6 +3,8 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { GigsError, Store, validClaimTtl, type ClaimFilter, type LabelFilter } from "./store";
 
+const UI_PATH = new URL("./ui.html", import.meta.url).pathname;
+
 export interface HandlerOptions {
   token?: string;
 }
@@ -24,6 +26,8 @@ export function createHandler(store: Store, { token }: HandlerOptions = {}) {
 async function route(store: Store, req: Request, token: string | undefined): Promise<unknown> {
   const url = new URL(req.url);
   if (req.method === "GET" && url.pathname === "/health") return { ok: true };
+  // Read-only UI; the page itself is public, its API calls carry the token.
+  if (req.method === "GET" && url.pathname === "/") return new Response(Bun.file(UI_PATH));
 
   if (token && req.headers.get("authorization") !== `Bearer ${token}`) {
     throw new GigsError("unauthorized", "missing or invalid token", 401);
