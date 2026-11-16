@@ -21,10 +21,36 @@ bun src/cli.ts serve
 | `GIGS_HOST`              | `127.0.0.1`                   | Address to listen on                              |
 | `GIGS_PORT`              | `7357`                        | Port to listen on                                 |
 | `GIGS_DB`                | `~/.local/share/gigs/gigs.db` | SQLite file (its directory is created)            |
-| `GIGS_TOKEN`             | unset (no auth)               | If set, clients must send `Authorization: Bearer` |
+| `GIGS_ADMIN_TOKEN`       | unset (auth off)              | Admin token; setting it turns auth on (see below) |
 | `GIGS_CLAIM_TTL_MINUTES` | `60`                          | How long a claim lasts without activity           |
 
-`GET /health` answers without a token. Set `GIGS_TOKEN` before binding to anything but localhost.
+Set `GIGS_ADMIN_TOKEN` before binding to anything but localhost. The server no longer reads
+`GIGS_TOKEN`; it refuses to start if that is set without `GIGS_ADMIN_TOKEN`.
+
+### Auth
+
+Auth is one switch for the whole server, never per project:
+
+- **Off** (no `GIGS_ADMIN_TOKEN`): no tokens anywhere, for localhost or a tailnet.
+- **On**: every request except `GET /health` and the UI page at `/` needs
+  `Authorization: Bearer <token>`. The admin token can do everything. A **project token** reads and
+  writes its own project only: every gig, spec, comment, label, dep and claim call, including ids in
+  the body or query (`--parent`, `--blocked-by`, `--spec`, link targets, ...), must stay inside it,
+  else `403 forbidden`. Related gigs in other projects show only their id. Listing and creating
+  projects and managing tokens need the admin token. `GET /health` says `{"ok":true,"auth":true}`.
+
+A project can have several tokens (rotate: add a new one, then revoke the old). They are stored
+hashed and shown once, on creation. With the admin token in `GIGS_TOKEN`:
+
+```sh
+gig init ws --name "Web shop"   # creates ws and writes its first token into .gigs.json
+gig token add --label ci        # prints {id, project, label, created_at, token}; the only time you see it
+gig token list                  # [{id, project, label?, created_at, revoked_at?}], never the token
+gig token revoke 3
+```
+
+Everyone holding a project's token is trusted: the token says which project, not who, so the actor
+(`GIG_ACTOR` / `--as`) stays self-declared.
 
 ### As a systemd user service
 
@@ -48,7 +74,7 @@ systemctl --user enable --now gigs
 journalctl --user -u gigs -f
 ```
 
-Add `Environment=GIGS_TOKEN=...` (etc.) under `[Service]` to configure it.
+Add `Environment=GIGS_ADMIN_TOKEN=...` (etc.) under `[Service]` to configure it.
 
 ## Installing `gig`
 
@@ -66,12 +92,12 @@ Don't add `-C <checkout>`: `gig` must run in the caller's directory to find its 
 
 Client environment:
 
-| Variable      | Default                 | Meaning                                  |
-| ------------- | ----------------------- | ---------------------------------------- |
-| `GIGS_URL`    | `http://127.0.0.1:7357` | Server to talk to                        |
-| `GIGS_TOKEN`  | unset                   | Bearer token, if the server requires one |
-| `GIG_ACTOR`   | `$USER`                 | Who you act as (also `--as <actor>`)     |
-| `GIG_PROJECT` | nearest `.gigs.json`    | Project prefix (also `-P <prefix>`)      |
+| Variable      | Default                         | Meaning                                        |
+| ------------- | ------------------------------- | ---------------------------------------------- |
+| `GIGS_URL`    | `http://127.0.0.1:7357`         | Server to talk to                              |
+| `GIGS_TOKEN`  | `token` in nearest `.gigs.json` | Bearer token (project or admin), if auth is on |
+| `GIG_ACTOR`   | `$USER`                         | Who you act as (also `--as <actor>`)           |
+| `GIG_PROJECT` | nearest `.gigs.json`            | Project prefix (also `-P <prefix>`)            |
 
 ## Projects
 
@@ -83,7 +109,10 @@ gig init ws --name "Web shop"   # creates the project if missing, else links it
 ```
 
 This writes `.gigs.json` (`{"project": "ws"}`). Commit it: `gig` finds it by walking up from the
-current directory, so everyone in the repo works on the same project.
+current directory, so everyone in the repo works on the same project. When auth is on and you run
+`gig init` with the admin token, it also writes a new project token (`"token"`, sent as the bearer
+token unless `GIGS_TOKEN` is set), so every checkout and agent just works; re-running `init` keeps it.
+For a public repo, keep the token out of git and pass it as `GIGS_TOKEN` instead.
 
 ## Core concepts
 
@@ -210,6 +239,7 @@ gig comment ws-5 "Stripe." --as alice && gig close ws-5 --as alice   # ws-3 beco
 
 ```
 gig serve                          gig init <prefix> [--name <name>]       gig projects
+gig token add [--label x]          gig token list                          gig token revoke <id>
 gig create <title> [-t type] [-p 0-4] [-d desc|-] [--parent id] [--blocked-by id[,id]] [--discovered-from id] [--spec id] [--label l[,l]] [--human-only] [--defer] [--until t]
 gig list [--all] [--status s[,s]] [--type t] [--parent id] [--spec id] [--label l[,l]] [--exclude-label l[,l]] [--human-only]   # --parent: direct children
 gig ready [--spec id] [--parent id] [--label l[,l]] [--exclude-label l[,l]] [--human-only]   # --parent: whole subtree
@@ -253,6 +283,8 @@ silently dropping someone else's change. Text starting with `-` needs `--old=<te
     claim/close fields, `parent` and relations as `{id, title, status}` (unfinished only), `closed`
     counts per relation, and `comments: [{author, at, body}]`. `claim` prints `null` if nothing is ready.
   - `comment` prints `{gig_id, author, at, body}`.
+  - `token list` and `token revoke` print `{id, project, label?, created_at, revoked_at?}`; `token add` adds
+    `token`. `init` prints the project, plus `token_id` when it wrote a new token.
   - `spec create`, `spec update`, `spec edit`, `spec ready`, `spec close`, `spec reopen` and `spec list`
     print `{id, title, version, status, close_reason?}`; `spec show` prints the same plus `text`.
   - `spec history` prints ascending `{version, by, at, kind, title?, text?, edits?}` entries:

@@ -86,7 +86,7 @@ describe("create deferred over HTTP and the CLI", () => {
   const sdir = mkdtempSync(join(tmpdir(), "gigs-create-defer-cli-"));
   const s = new Store({ path: join(sdir, "gigs.db") });
   s.createProject("cd");
-  const server = Bun.serve({ port: 0, fetch: createHandler(s, { token: "t0k" }) });
+  const server = Bun.serve({ port: 0, fetch: createHandler(s, { adminToken: "t0k" }) });
   afterAll(() => { server.stop(true); s.dispose(); rmSync(sdir, { recursive: true, force: true }); });
 
   const post = (body: unknown) =>

@@ -141,7 +141,7 @@ describe("migration 6", () => {
     store.claim(held.id, "holder");
     store.dispose();
     const db = new Database(path);
-    db.run("ALTER TABLE specs DROP COLUMN state; ALTER TABLE specs DROP COLUMN close_reason; ALTER TABLE specs DROP COLUMN closed_by; ALTER TABLE specs DROP COLUMN closed_at; ALTER TABLE gigs DROP COLUMN human; DROP TABLE labels; PRAGMA user_version = 5;");
+    db.run("DROP TABLE tokens; ALTER TABLE specs DROP COLUMN state; ALTER TABLE specs DROP COLUMN close_reason; ALTER TABLE specs DROP COLUMN closed_by; ALTER TABLE specs DROP COLUMN closed_at; ALTER TABLE gigs DROP COLUMN human; DROP TABLE labels; PRAGMA user_version = 5;");
     db.close();
     store = new Store({ path, now: () => clock, claimTtlMinutes: 30 });
     expect(store.getGig(held.id)).toMatchObject({ title: "held", claimed_by: "holder", labels: [] });

@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { Client, type GigChangesInput } from "./client";
 import { configFromEnv, serve } from "./server";
-import { GigsError, formatReasons as reasonText, type Gig, type GigDetail, type GigSummary, type LinkKind, type Project, type Spec, type TextEdit } from "./store";
+import { GigsError, formatReasons as reasonText, type Gig, type GigDetail, type GigSummary, type LinkKind, type Project, type Spec, type TextEdit, type Token } from "./store";
 
 type Options = NonNullable<ParseArgsConfig["options"]>;
 type Values = Record<string, string | boolean | undefined>;
@@ -44,7 +44,7 @@ interface Command {
 const COMMANDS: Record<string, Command> = {
   serve: {
     usage: "serve",
-    summary: "start the server (env: GIGS_HOST, GIGS_PORT, GIGS_DB, GIGS_TOKEN, GIGS_CLAIM_TTL_MINUTES)",
+    summary: "start the server (env: GIGS_HOST, GIGS_PORT, GIGS_DB, GIGS_ADMIN_TOKEN, GIGS_CLAIM_TTL_MINUTES; GIGS_ADMIN_TOKEN turns auth on)",
     async run() {
       const config = configFromEnv();
       const server = serve(config);
@@ -54,7 +54,7 @@ const COMMANDS: Record<string, Command> = {
 
   init: {
     usage: "init <prefix> [--name <name>]",
-    summary: "create the project if missing (else just link it) and write ./.gigs.json",
+    summary: "create the project if missing (else just link it) and write ./.gigs.json; when the server has auth on and you use the admin token, also a new project token as \"token\" (kept if ./.gigs.json already has one)",
     options: { name: { type: "string" } },
     async run({ args, values, json, print, client }) {
       const prefix = arg(args, 0, "prefix");
@@ -64,16 +64,57 @@ const COMMANDS: Record<string, Command> = {
       try {
         project = await c.createProject(prefix, values.name as string | undefined);
       } catch (err) {
-        if (!(err instanceof GigsError && err.code === "conflict")) throw err;
+        // A project token may link its own project but not create one.
+        if (!(err instanceof GigsError && (err.code === "conflict" || err.code === "forbidden"))) throw err;
         project = await c.getProject(prefix);
         created = false;
         if (values.name !== undefined && values.name !== project.name) {
           console.error(`warning: project ${project.prefix} already exists as "${project.name}"; --name ignored`);
         }
       }
-      writeFileSync(".gigs.json", JSON.stringify({ project: project.prefix }, null, 2) + "\n");
-      if (json) return print(project);
-      console.log(`${created ? "created" : "linked existing"} project ${project.prefix} (${project.name}); wrote .gigs.json`);
+      const existing = readConfig(".gigs.json");
+      let token = existing?.project === project.prefix ? existing.token : undefined;
+      let minted: Token | undefined;
+      if (!token && (await c.health()).auth) {
+        try {
+          const created = await c.createToken(project.prefix, "init");
+          ({ token, ...minted } = created);
+        } catch (err) {
+          // A project token cannot mint tokens; the caller already has one.
+          if (!(err instanceof GigsError && err.code === "forbidden")) throw err;
+        }
+      }
+      const config = token ? { project: project.prefix, token } : { project: project.prefix };
+      writeFileSync(".gigs.json", JSON.stringify(config, null, 2) + "\n");
+      if (json) return print(project, (p) => compact({ ...p, token_id: minted?.id }));
+      console.log(`${created ? "created" : "linked existing"} project ${project.prefix} (${project.name}); wrote .gigs.json${minted ? " with a new token (keep it out of public repos)" : ""}`);
+    },
+  },
+
+  token: {
+    usage: "token add [--label x] | token list | token revoke <id>",
+    summary: "manage the project's tokens; needs the admin token. `add` prints the new token, the only time it is shown; `list` never shows tokens; revoked tokens stop working at once",
+    options: { label: { type: "string" } },
+    async run({ args, values, json, print, client, project }) {
+      const action = arg(args, 0, "add|list|revoke");
+      if (values.label !== undefined && action !== "add") throw new Error("--label only works with token add");
+      if (args.length > (action === "revoke" ? 2 : 1)) throw new Error("too many arguments (see `gig token --help`)");
+      if (action === "add") {
+        const token = await client().createToken(project(), values.label as string | undefined);
+        if (json) return print(token, (t) => ({ ...tokenRow(t), token: t.token }));
+        return console.log(token.token);
+      }
+      if (action === "list") {
+        const tokens = await client().listTokens(project());
+        if (json) return print(tokens, (list) => list.map(tokenRow));
+        return console.log(tokens.length ? tokens.map((t) => `${t.id}  ${t.revoked_at ? "revoked" : "active "}  ${t.created_at}  ${t.label ?? ""}`.trimEnd()).join("\n") : "no tokens");
+      }
+      if (action === "revoke") {
+        const token = await client().revokeToken(arg(args, 1, "id"));
+        if (json) return print(token, tokenRow);
+        return console.log(`revoked token ${token.id}`);
+      }
+      throw new Error("expected `gig token add|list|revoke`");
     },
   },
 
@@ -514,7 +555,8 @@ global options:
   --spec <id>        (create, list, ready, blocked, claim) the project comes
                      from the spec id, overriding -P, $GIG_PROJECT, .gigs.json
 
-env: GIGS_URL (default http://127.0.0.1:7357), GIGS_TOKEN`;
+env: GIGS_URL (default http://127.0.0.1:7357), GIGS_TOKEN (default: "token" in
+     the nearest .gigs.json)`;
 }
 
 export async function main(argv: string[]) {
@@ -565,7 +607,7 @@ export async function main(argv: string[]) {
     client: () =>
       new Client({
         url: process.env.GIGS_URL || "http://127.0.0.1:7357",
-        token: process.env.GIGS_TOKEN || undefined,
+        token: process.env.GIGS_TOKEN || nearestConfig()?.token || undefined,
         actor: (values.as as string | undefined) || process.env.GIG_ACTOR || process.env.USER || "unknown",
       }),
     project: () => specProject(values.spec) ?? resolveProject(values.project as string | undefined),
@@ -585,16 +627,27 @@ function findCommand(argv: string[]): number {
 function resolveProject(flag: string | undefined): string {
   if (flag) return flag;
   if (process.env.GIG_PROJECT) return process.env.GIG_PROJECT;
+  const found = nearestConfig();
+  if (!found) throw new Error("no project: pass -P <prefix>, set GIG_PROJECT, or run `gig init <prefix>` in your repo");
+  if (typeof found.project !== "string" || !found.project) throw new Error(`${found.file} has no "project"`);
+  return found.project;
+}
+
+interface Config { project?: unknown; token?: string; file: string }
+
+/** The nearest .gigs.json, walking up from the current directory. */
+function nearestConfig(): Config | undefined {
   for (let dir = process.cwd(); ; dir = dirname(dir)) {
-    const file = join(dir, ".gigs.json");
-    if (existsSync(file)) {
-      const project = JSON.parse(readFileSync(file, "utf8")).project;
-      if (typeof project !== "string" || !project) throw new Error(`${file} has no "project"`);
-      return project;
-    }
-    if (dirname(dir) === dir) break;
+    const config = readConfig(join(dir, ".gigs.json"));
+    if (config) return config;
+    if (dirname(dir) === dir) return undefined;
   }
-  throw new Error("no project: pass -P <prefix>, set GIG_PROJECT, or run `gig init <prefix>` in your repo");
+}
+
+function readConfig(file: string): Config | undefined {
+  if (!existsSync(file)) return undefined;
+  const { project, token } = JSON.parse(readFileSync(file, "utf8"));
+  return { project, token: typeof token === "string" && token ? token : undefined, file };
 }
 
 /** The project of a spec id like `gig-s3`, or undefined without a spec. */
@@ -740,14 +793,14 @@ function showCompactDetail(detail: GigDetail): string {
   const lines = [`${b.id}  ${b.title}`, `${b.type} · P${b.priority} · ${status}${b.human ? " · human only" : ""}`];
   if (b.spec) lines.push(`spec: ${b.spec}`);
   if (b.labels.length) lines.push(`labels: ${b.labels.join(", ")}`);
-  if (detail.parent) lines.push(`parent: ${detail.parent.id} ${detail.parent.title}`);
+  if (detail.parent) lines.push(`parent: ${[detail.parent.id, detail.parent.title].filter(Boolean).join(" ")}`);
   if (b.status === "open" && !ready) lines.push(`not ready: ${reasonText(reasons)}`);
   for (const key of RELATIONS) {
     const unfinished = detail[key].filter((gig) => gig.status !== "closed");
     const closed = detail[key].length - unfinished.length;
     const label = key.replace("_", " ");
     if (unfinished.length) {
-      lines.push(`${label}:`, ...unfinished.map((gig) => `  ${gig.id}  ${gig.status}  ${gig.title}`));
+      lines.push(`${label}:`, ...unfinished.map(summaryLine));
       if (closed) lines.push(`  +${closed} closed`);
     } else if (closed) {
       lines.push(`${label}: ${closed} closed`);
@@ -762,6 +815,11 @@ function showCompactDetail(detail: GigDetail): string {
     }
   }
   return lines.join("\n");
+}
+
+/** A related gig; one in another project than the token's shows only its id. */
+function summaryLine(gig: GigSummary): string {
+  return "  " + [gig.id, gig.status, gig.title].filter(Boolean).join("  ");
 }
 
 function showDetail(detail: GigDetail): string {
@@ -783,7 +841,7 @@ function showDetail(detail: GigDetail): string {
   const relation = (label: string, gigs: GigDetail["children"]) => {
     if (!gigs.length) return;
     lines.push(`${label}:`);
-    for (const gig of gigs) lines.push(`  ${gig.id}  ${gig.status}  ${gig.title}`);
+    for (const gig of gigs) lines.push(summaryLine(gig));
   };
   if (detail.parent) relation("parent", [detail.parent]);
   for (const key of RELATIONS) {
@@ -795,6 +853,11 @@ function showDetail(detail: GigDetail): string {
     for (const c of detail.comments) lines.push(`  ${c.created_at} ${c.author}:`, ...c.body.split("\n").map((l) => `    ${l}`));
   }
   return lines.join("\n");
+}
+
+/** The compact JSON row of a token; never the token itself. */
+function tokenRow(t: Token) {
+  return compact({ id: t.id, project: t.project, label: t.label, created_at: t.created_at, revoked_at: t.revoked_at });
 }
 
 /** The compact JSON row of a spec; `state` is left out, the derived `status` is what matters. */

@@ -10,7 +10,7 @@ const dir = mkdtempSync(join(tmpdir(), "gigs-e2e-"));
 const repo = join(dir, "repo");
 mkdirSync(join(repo, "sub"), { recursive: true });
 const store = new Store({ path: join(dir, "gigs.db") });
-const server = Bun.serve({ port: 0, fetch: createHandler(store, { token: "t0k" }) });
+const server = Bun.serve({ port: 0, fetch: createHandler(store, { adminToken: "t0k" }) });
 
 afterAll(() => {
   server.stop(true);
@@ -55,7 +55,8 @@ test("full workflow through the CLI", async () => {
   expect(noProject.stderr).toContain("gig init");
 
   expect(await cliJson(["init", "gig", "--name", "Gigs"])).toMatchObject({ prefix: "gig", name: "Gigs" });
-  expect(JSON.parse(readFileSync(join(repo, ".gigs.json"), "utf8"))).toEqual({ project: "gig" });
+  // Auth is on and GIGS_TOKEN is the admin token: init also writes the project's first token.
+  expect(JSON.parse(readFileSync(join(repo, ".gigs.json"), "utf8"))).toEqual({ project: "gig", token: expect.stringMatching(/^gig_/) });
   // Idempotent: linking an existing project succeeds.
   expect(await cliJson(["init", "gig"])).toMatchObject({ prefix: "gig", name: "Gigs" });
   const renamed = await cli(["init", "gig", "--name", "Other"]);

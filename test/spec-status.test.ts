@@ -43,14 +43,14 @@ describe("store", () => {
     const s = spec();
     store.dispose();
     const db = new Database(path);
-    db.run("ALTER TABLE specs DROP COLUMN state; ALTER TABLE specs DROP COLUMN close_reason; ALTER TABLE specs DROP COLUMN closed_by; ALTER TABLE specs DROP COLUMN closed_at; PRAGMA user_version = 7;");
+    db.run("DROP TABLE tokens; ALTER TABLE specs DROP COLUMN state; ALTER TABLE specs DROP COLUMN close_reason; ALTER TABLE specs DROP COLUMN closed_by; ALTER TABLE specs DROP COLUMN closed_at; PRAGMA user_version = 7;");
     db.close();
     store = new Store({ path, now: () => new Date(at) });
     expect(store.getSpec(s.id)).toEqual(s);
     expect(store.getSpec(s.id)).toMatchObject({ state: "draft", status: "draft" });
     const raw = new Database(path);
     try {
-      expect(raw.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
+      expect(raw.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
       expect(() => raw.run("UPDATE specs SET state = 'active'")).toThrow();
     } finally { raw.close(); }
   });
@@ -165,8 +165,8 @@ describe("store", () => {
 
 describe("http and cli", () => {
   const store = new Store({ path: join(dir, "http.db") });
-  const server = Bun.serve({ port: 0, fetch: createHandler(store, { token: "t0k" }) });
-  const handle = createHandler(store, { token: "t0k" });
+  const server = Bun.serve({ port: 0, fetch: createHandler(store, { adminToken: "t0k" }) });
+  const handle = createHandler(store, { adminToken: "t0k" });
   afterAll(() => { server.stop(true); store.dispose(); });
 
   function call(method: string, path: string, opts: { body?: unknown; actor?: string } = {}) {

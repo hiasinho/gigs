@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { createHash, randomBytes } from "node:crypto";
 
 export const TYPES = ["bug", "feature", "task", "epic", "chore"] as const;
 export const STATUSES = ["open", "in_progress", "deferred", "closed"] as const;
@@ -9,6 +10,15 @@ export interface Project {
   prefix: string;
   name: string;
   created_at: string;
+}
+
+/** A project token's record; the plaintext is never stored, only its sha256. */
+export interface Token {
+  id: number;
+  project: string;
+  label: string | null;
+  created_at: string;
+  revoked_at: string | null;
 }
 
 export interface Gig {
@@ -286,6 +296,17 @@ const MIGRATIONS = [
   ALTER TABLE specs ADD COLUMN closed_by TEXT;
   ALTER TABLE specs ADD COLUMN closed_at TEXT;
   `,
+  `
+  CREATE TABLE tokens (
+    id         INTEGER PRIMARY KEY,
+    project    TEXT NOT NULL REFERENCES projects(prefix),
+    hash       TEXT NOT NULL UNIQUE,
+    label      TEXT,
+    created_at TEXT NOT NULL,
+    revoked_at TEXT
+  );
+  CREATE INDEX tokens_project ON tokens(project);
+  `,
 ];
 
 const PROJECT_COLUMNS = "prefix, name, created_at";
@@ -299,6 +320,7 @@ const SPEC_STATUS = `CASE WHEN specs.state = 'closed' THEN 'closed'
   WHEN EXISTS (SELECT 1 FROM gigs WHERE gigs.spec = specs.id) THEN 'done'
   ELSE specs.state END`;
 const SPEC_COLUMNS = `id, project, title, text, version, state, (${SPEC_STATUS}) AS status, close_reason, closed_by, closed_at, created_by, created_at`;
+const TOKEN_COLUMNS = "id, project, label, created_at, revoked_at";
 const COMMENT_COLUMNS = "id, gig_id, author, body, created_at";
 const CLEAR_CLAIM = "claimed_by = NULL, claimed_at = NULL, claim_expires_at = NULL";
 const READY_ORDER = "ORDER BY priority, created_at, number";
@@ -362,6 +384,45 @@ export class Store {
 
   getProject(prefix: string): Project {
     return this.op(() => this.mustGetProject(prefix));
+  }
+
+  // --- tokens ---
+
+  /** A new token for the project; the plaintext `token` is returned here only, never stored. */
+  createToken(project: string, label?: unknown): Token & { token: string } {
+    return this.op(() => {
+      const p = this.mustGetProject(project);
+      if (label !== undefined && label !== null && typeof label !== "string") throw badRequest("label must be a string");
+      const token = `gig_${randomBytes(32).toString("base64url")}`;
+      const row = this.db
+        .query(`INSERT INTO tokens (project, hash, label, created_at) VALUES (?, ?, ?, ?) RETURNING ${TOKEN_COLUMNS}`)
+        .get(p.prefix, sha256(token), label?.trim() || null, this.timestamp()) as Token;
+      return { ...row, token };
+    });
+  }
+
+  /** All tokens of a project, revoked ones included. */
+  listTokens(project: string): Token[] {
+    return this.op(() =>
+      this.db.query(`SELECT ${TOKEN_COLUMNS} FROM tokens WHERE project = ? ORDER BY id`).all(this.mustGetProject(project).prefix) as Token[],
+    );
+  }
+
+  revokeToken(id: unknown): Token {
+    return this.op(() => {
+      const token = this.db.query(`SELECT ${TOKEN_COLUMNS} FROM tokens WHERE id = ?`).get(Number(id)) as Token | null;
+      if (!token) throw notFound(`token ${id} not found`);
+      if (token.revoked_at) throw conflict(`token ${token.id} is already revoked`);
+      return this.db
+        .query(`UPDATE tokens SET revoked_at = ? WHERE id = ? RETURNING ${TOKEN_COLUMNS}`)
+        .get(this.timestamp(), token.id) as Token;
+    });
+  }
+
+  /** The project a valid (unrevoked) token belongs to, or null. */
+  tokenProject(token: string): string | null {
+    const row = this.db.query("SELECT project FROM tokens WHERE hash = ? AND revoked_at IS NULL").get(sha256(token)) as { project: string } | null;
+    return row?.project ?? null;
   }
 
   // --- gigs ---
@@ -1051,6 +1112,10 @@ export class Store {
       .run(actor, now, this.expiry(), now, id);
     return this.mustGet(id);
   }
+}
+
+export function sha256(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
 }
 
 /** Expiries must remain sortable as four-digit-year ISO timestamps in SQLite. */

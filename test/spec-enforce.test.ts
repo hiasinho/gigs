@@ -117,8 +117,8 @@ describe("store", () => {
 
 describe("http and cli", () => {
   const store = new Store({ path: join(dir, "http.db") });
-  const server = Bun.serve({ port: 0, fetch: createHandler(store, { token: "t0k" }) });
-  const handle = createHandler(store, { token: "t0k" });
+  const server = Bun.serve({ port: 0, fetch: createHandler(store, { adminToken: "t0k" }) });
+  const handle = createHandler(store, { adminToken: "t0k" });
   afterAll(() => { server.stop(true); store.dispose(); });
 
   function call(method: string, path: string, opts: { body?: unknown; actor?: string } = {}) {

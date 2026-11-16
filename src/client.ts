@@ -1,4 +1,4 @@
-import { GigsError, type Gig, type GigDetail, type Comment, type Project, type Reason, type Spec, type TextEdit, type SpecHistory } from "./store";
+import { GigsError, type Gig, type GigDetail, type Comment, type Project, type Reason, type Spec, type TextEdit, type SpecHistory, type Token } from "./store";
 
 export interface ClientOptions {
   url: string;
@@ -62,8 +62,22 @@ export interface ListQuery extends LabelQuery {
 export class Client {
   constructor(private opts: ClientOptions) {}
 
+  /** `auth`: whether the server requires tokens. */
   health() {
-    return this.request<{ ok: true }>("GET", "/health");
+    return this.request<{ ok: true; auth: boolean }>("GET", "/health");
+  }
+
+  /** Needs the admin token; the plaintext token is only in this response. */
+  createToken(project: string, label?: string) {
+    return this.request<Token & { token: string }>("POST", `/projects/${enc(project)}/tokens`, { label });
+  }
+
+  listTokens(project: string) {
+    return this.request<Token[]>("GET", `/projects/${enc(project)}/tokens`);
+  }
+
+  revokeToken(id: string) {
+    return this.request<Token>("POST", `/tokens/${enc(id)}/revoke`);
   }
 
   listProjects() {

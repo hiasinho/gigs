@@ -238,7 +238,7 @@ describe("migration 3", () => {
     store.addComment(held.id, "holder", "gone after downgrade");
     store.dispose();
     const db = new Database(path);
-    db.run("ALTER TABLE gigs DROP COLUMN human; DROP TABLE labels; DROP TABLE spec_versions; ALTER TABLE specs DROP COLUMN version; DROP INDEX gigs_spec; ALTER TABLE gigs DROP COLUMN spec; ALTER TABLE projects DROP COLUMN next_spec_number; DROP TABLE specs;");
+    db.run("DROP TABLE tokens; ALTER TABLE gigs DROP COLUMN human; DROP TABLE labels; DROP TABLE spec_versions; ALTER TABLE specs DROP COLUMN version; DROP INDEX gigs_spec; ALTER TABLE gigs DROP COLUMN spec; ALTER TABLE projects DROP COLUMN next_spec_number; DROP TABLE specs;");
     db.run("DROP TABLE comments; ALTER TABLE gigs DROP COLUMN claim_expires_at; ALTER TABLE gigs DROP COLUMN defer_until; PRAGMA user_version = 2;");
     db.close();
     minutes(120);

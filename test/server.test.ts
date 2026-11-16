@@ -7,7 +7,7 @@ import { Store } from "../src/store";
 
 const dir = mkdtempSync(join(tmpdir(), "gigs-server-"));
 const store = new Store({ path: join(dir, "gigs.db") });
-const handle = createHandler(store, { token: "s3cret" });
+const handle = createHandler(store, { adminToken: "s3cret" });
 
 afterAll(() => {
   store.dispose();
@@ -22,7 +22,7 @@ function call(method: string, path: string, opts: { body?: string; actor?: strin
 }
 
 test("health needs no token; everything else does", async () => {
-  expect(await (await call("GET", "/health", { token: null })).json()).toEqual({ ok: true });
+  expect(await (await call("GET", "/health", { token: null })).json()).toEqual({ ok: true, auth: true });
   const res = await call("GET", "/projects", { token: "wrong" });
   expect(res.status).toBe(401);
   expect(await res.json()).toEqual({ error: { code: "unauthorized", message: "missing or invalid token" } });
@@ -108,11 +108,11 @@ test("encoded case-insensitive IDs and JSON object validation", async () => {
 });
 
 test("config from env", () => {
-  expect(configFromEnv({ GIGS_PORT: "1234", GIGS_DB: "/x.db", GIGS_TOKEN: "t" })).toEqual({
+  expect(configFromEnv({ GIGS_PORT: "1234", GIGS_DB: "/x.db", GIGS_ADMIN_TOKEN: "t" })).toEqual({
     host: "127.0.0.1",
     port: 1234,
     db: "/x.db",
-    token: "t",
+    adminToken: "t",
     claimTtlMinutes: 60,
   });
   expect(configFromEnv({ GIGS_CLAIM_TTL_MINUTES: "15" }).claimTtlMinutes).toBe(15);

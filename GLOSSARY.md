@@ -28,6 +28,13 @@ How urgent a gig is, from 0 (critical) to 4 (backlog).
 The name an agent or human acts under. Every claim, close, and comment records its actor.
 _Avoid_: User, assignee, owner
 
+**Project token**:
+A secret that lets whoever holds it read and write one project, and nothing else, while auth is on. It says which project, not which actor.
+_Avoid_: API key, password
+
+**Admin token**:
+The server's one secret that can do everything, including creating projects and managing project tokens. Configuring it turns auth on for the whole server; without it there is no auth.
+
 **Comment**:
 A note an actor adds to a gig over time, such as progress or a handoff.
 _Avoid_: Note, message

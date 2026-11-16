@@ -7,7 +7,7 @@ import { GigsError, Store } from "../src/store";
 
 /** Removes migrations 8, 7, 6, 5 and 4, leaving a v3 database. */
 const DROP_MIGRATION_4 =
-  "ALTER TABLE specs DROP COLUMN state; ALTER TABLE specs DROP COLUMN close_reason; ALTER TABLE specs DROP COLUMN closed_by; ALTER TABLE specs DROP COLUMN closed_at; ALTER TABLE gigs DROP COLUMN human; DROP TABLE labels; DROP TABLE spec_versions; ALTER TABLE specs DROP COLUMN version; DROP INDEX gigs_spec; ALTER TABLE gigs DROP COLUMN spec; ALTER TABLE projects DROP COLUMN next_spec_number; DROP TABLE specs;";
+  "DROP TABLE tokens; ALTER TABLE specs DROP COLUMN state; ALTER TABLE specs DROP COLUMN close_reason; ALTER TABLE specs DROP COLUMN closed_by; ALTER TABLE specs DROP COLUMN closed_at; ALTER TABLE gigs DROP COLUMN human; DROP TABLE labels; DROP TABLE spec_versions; ALTER TABLE specs DROP COLUMN version; DROP INDEX gigs_spec; ALTER TABLE gigs DROP COLUMN spec; ALTER TABLE projects DROP COLUMN next_spec_number; DROP TABLE specs;";
 
 let dir: string;
 let store: Store;
@@ -250,7 +250,7 @@ describe("migrations", () => {
     expect(again.getGig("gig-1").title).toBe("x");
     again.dispose();
     const db = new Database(join(dir, "gigs.db"));
-    expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
+    expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
     db.close();
   });
 });

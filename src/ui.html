@@ -37,8 +37,25 @@ async function projects() {
   return ps.map((p) => `<li><a href="#p/${esc(p.prefix)}">${esc(p.prefix)}</a> ${esc(p.name)}</li>`).join("");
 }
 
+const specLink = (s) => `<a href="#s/${esc(s.id)}">${esc(s.id)}</a> ${esc(s.title)}`;
+
 async function project(id) {
-  const [gigs, ready] = await Promise.all([api(`/projects/${id}/gigs?all=1`), api(`/projects/${id}/ready`)]);
+  const [gigs, ready, specs] = await Promise.all([api(`/projects/${id}/gigs?all=1`), api(`/projects/${id}/ready`), api(`/projects/${id}/specs?all=1`)]);
+  return (specs.length ? `<h2>specs (${specs.length})</h2><ul>${specs.map((s) => `<li>${specLink(s)} <span class=dim>${esc(s.status)}</span></li>`).join("")}</ul>` : "") +
+    gigGroups(gigs, ready);
+}
+
+async function spec(id) {
+  const s = await api(`/specs/${id}`);
+  const gigs = await api(`/projects/${encodeURIComponent(s.project)}/gigs?spec=${id}&all=1`);
+  $("#crumb").innerHTML = `/ <a href="#p/${esc(s.project)}">${esc(s.project)}</a>`;
+  return `<h1 style="font-size:1.2em">${esc(s.id)} ${esc(s.title)}</h1>
+    <div class=dim>${esc(s.status)} · v${esc(s.version)}<br>created ${ago(s.created_at)} by ${esc(s.created_by)}${s.closed_at ? `<br>closed ${ago(s.closed_at)}: ${esc(s.close_reason)}` : ""}</div>
+    <pre>${esc(s.text)}</pre>
+    ${gigs.length ? `<h2>gigs (${gigs.length})</h2><ul>${gigs.map((g) => `<li>${link(g)} <span class=dim>${esc(g.status)}</span></li>`).join("")}</ul>` : ""}`;
+}
+
+function gigGroups(gigs, ready) {
   const readyIds = new Set(ready.map((g) => g.id));
   const groups = { in_progress: [], ready: [], blocked: [], deferred: [], closed: [] };
   for (const g of gigs) groups[g.status === "open" ? (readyIds.has(g.id) ? "ready" : "blocked") : g.status].push(g);
@@ -53,9 +70,9 @@ async function gig(id) {
   const d = await api(`/gigs/${id}`);
   const g = d.gig;
   $("#crumb").innerHTML = `/ <a href="#p/${esc(g.project)}">${esc(g.project)}</a>`;
-  const rel = (name, list) => (list?.length ? `<h2>${name}</h2><ul>${list.map((x) => `<li>${link(x)} <span class=dim>${x.status}</span></li>`).join("")}</ul>` : "");
-  const meta = [g.status, g.type, `p${g.priority}`, g.human && "human", g.claimed_by && `@${g.claimed_by}`, g.spec && `spec ${g.spec}`,
-    ...(g.labels ?? []).map((l) => `#${l}`)].filter(Boolean).map(esc).join(" · ");
+  const rel = (name, list) => (list?.length ? `<h2>${name}</h2><ul>${list.map((x) => `<li>${link(x)} <span class=dim>${esc(x.status)}</span></li>`).join("")}</ul>` : "");
+  const meta = [g.status, g.type, `p${g.priority}`, g.human && "human", g.claimed_by && `@${g.claimed_by}`, ...(g.labels ?? []).map((l) => `#${l}`)].filter(Boolean).map(esc).join(" · ") +
+    (g.spec ? ` · spec <a href="#s/${esc(g.spec)}">${esc(g.spec)}</a>` : "");
   return `<h1 style="font-size:1.2em">${esc(g.id)} ${esc(g.title)}</h1>
     <div class=dim>${meta}<br>created ${ago(g.created_at)} by ${esc(g.created_by)}${g.closed_at ? `<br>closed ${ago(g.closed_at)}: ${esc(g.close_reason)}` : ""}</div>
     ${g.description ? `<pre>${esc(g.description)}</pre>` : ""}
@@ -70,6 +87,7 @@ async function render() {
   try {
     $("#main").innerHTML = kind === "p" ? await project(encodeURIComponent(id))
       : kind === "g" ? await gig(encodeURIComponent(id))
+      : kind === "s" ? await spec(encodeURIComponent(id))
       : `<ul>${await projects()}</ul>`;
   } catch (e) {
     $("#main").innerHTML = `<p>error: ${esc(e.message)}</p>`;

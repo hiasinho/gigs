@@ -79,6 +79,12 @@ gig unclaim <your-id>                                  # ready again once the hu
 ## Other
 `show <id>` · `list [--all]` · `blocked` · `update <id> [--title t] [-d text|-] [-t type] [-p n] [--parent id|none]` · `dep add|rm <id> <blocker-id> [--kind related|discovered-from]` · `defer <id> [--until 4h|2d|YYYY-MM-DD]` · `undefer <id>` · `reopen <id>`
 
+## Auth
+Off unless the server has an admin token. On: `gig` sends `GIGS_TOKEN`, else `"token"` from `.gigs.json`.
+A project token covers its own project only; gigs elsewhere show as `{id}`. Don't create, revoke or paste tokens unless the user asks.
+Admin token only: `gig token add [--label x]` (shown once) · `gig token list` · `gig token revoke <id>` · `gig projects`.
+
 ## Trouble
 - unreachable: server down or wrong `GIGS_URL`; tell the user.
 - no project: `gig init <prefix>` (2-3 chars) in repo root (writes `.gigs.json`).
+- `unauthorized` (401): missing/revoked token; `forbidden` (403): token is for another project or needs admin. Tell the user.
