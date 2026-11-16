@@ -37,7 +37,7 @@ export default defineConfig({
     include: [
       "test/sql.test.ts", "test/store.test.ts", "test/lifecycle.test.ts", "test/links.test.ts", "test/labels.test.ts",
       "test/human.test.ts", "test/gig-edit.test.ts", "test/claim-filters.test.ts", "test/create-defer.test.ts",
-      "test/spec-status.test.ts", "test/spec-enforce.test.ts", "test/spec-history.test.ts", "test/auth.test.ts",
+      "test/spec-status.test.ts", "test/spec-enforce.test.ts", "test/spec-history.test.ts", "test/auth.test.ts", "test/transfer.test.ts",
       "test/do/worker-entry.ts",
     ],
   },

@@ -69,8 +69,12 @@ async function route(store: Store, req: Request, adminToken: string | undefined,
   const shape = parts.map((s, i) => (i === 1 ? ":" : s)).join("/");
   const key = `${req.method} /${shape}`;
   const param = parts[1] ?? "";
-  if (parts[0] === "tokens" || (parts[0] === "projects" && (parts.length === 1 || parts[2] === "tokens"))) adminOnly();
+  if (parts[0] === "admin" || parts[0] === "tokens" || (parts[0] === "projects" && (parts.length === 1 || parts[2] === "tokens"))) adminOnly();
   else if (parts[0] === "projects" || parts[0] === "gigs" || parts[0] === "specs") own(param);
+
+  // Moving the whole database to another server (see Store.exportDump).
+  if (req.method === "GET" && url.pathname === "/admin/export") return store.exportDump();
+  if (req.method === "POST" && url.pathname === "/admin/import") return store.importDump(await readBody(req));
 
   let actor = "";
   if (req.method !== "GET" && req.method !== "HEAD") {

@@ -29,6 +29,18 @@ describe("worker entry", () => {
     expect((await call("GET", "/projects", token)).status).toBe(403);
   });
 
+  test("admin export and import, without the DO's own tables", async () => {
+    expect((await call("POST", "/projects", ADMIN, { prefix: "ex" })).status).toBe(201);
+    const token = (await (await call("POST", "/projects/ex/tokens", ADMIN, {})).json() as { token: string }).token;
+    expect((await call("GET", "/admin/export", token)).status).toBe(403);
+    const dump = await (await call("GET", "/admin/export", ADMIN)).json() as { version: number; tables: Record<string, unknown[]> };
+    expect(dump.version).toBeGreaterThan(0);
+    expect(Object.keys(dump.tables)).not.toContain("schema_version");
+    expect(Object.keys(dump.tables).filter((t) => t.startsWith("_cf_"))).toEqual([]);
+    expect(dump.tables.projects).toContainEqual(expect.objectContaining({ prefix: "ex" }));
+    expect((await call("POST", "/admin/import", ADMIN, dump)).status).toBe(409);
+  });
+
   test("refuses every request without the admin token secret", async () => {
     const res = await worker.fetch(new Request("https://gigs.test/health"), { ...(env as Env), GIGS_ADMIN_TOKEN: undefined });
     expect(res.status).toBe(503);

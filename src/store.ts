@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import type { Sql } from "./sql";
+import type { Sql, SqlValue } from "./sql";
 
 export const TYPES = ["bug", "feature", "task", "epic", "chore"] as const;
 export const STATUSES = ["open", "in_progress", "deferred", "closed"] as const;
@@ -854,6 +854,68 @@ export class Store {
     });
   }
 
+  // --- transfer: moving a whole database between servers ---
+
+  /** Every table's rows, in primary key order, and the schema version. Raw: lapsed claims and defers stay as stored. */
+  exportDump(): Dump {
+    return this.sql.transaction(() => ({
+      version: this.sql.version(),
+      tables: Object.fromEntries(this.tables().map((t) => [
+        t.name,
+        this.sql.all<Row>(`SELECT * FROM ${quote(t.name)} ORDER BY ${t.pk.length ? t.pk.map(quote).join(", ") : "rowid"}`),
+      ])),
+    }));
+  }
+
+  /**
+   * Loads a dump from exportDump into this database, which must have no rows and the same schema version.
+   * One transaction, rows exactly as given (ids, counters, timestamps, claims), referenced rows first.
+   */
+  importDump(dump: unknown): { version: number; tables: Record<string, number> } {
+    if (!isDump(dump)) throw badRequest("a dump is { version: number, tables: { [table]: row objects[] } }");
+    return this.sql.transaction(() => {
+      const version = this.sql.version();
+      if (dump.version !== version) throw conflict(`the dump is schema version ${dump.version}, this database ${version}`);
+      const tables = this.tables();
+      for (const name of Object.keys(dump.tables)) {
+        if (!tables.some((t) => t.name === name)) throw badRequest(`unknown table ${name}`);
+      }
+      for (const t of tables) {
+        if (this.sql.get(`SELECT 1 FROM ${quote(t.name)} LIMIT 1`)) throw conflict(`this database is not empty (${t.name} has rows)`);
+      }
+      const counts: Record<string, number> = {};
+      for (const t of referencedFirst(tables)) {
+        const rows = dump.tables[t.name] ?? [];
+        for (const [i, row] of referencedRowsFirst(t, rows).entries()) {
+          const columns = Object.keys(row);
+          const unknown = columns.find((c) => !t.columns.includes(c));
+          if (unknown !== undefined) throw badRequest(`${t.name}: unknown column ${unknown}`);
+          try {
+            this.sql.run(`INSERT INTO ${quote(t.name)} (${columns.map(quote).join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+              ...columns.map((c) => row[c]!));
+          } catch (err) {
+            throw badRequest(`${t.name} row ${i}: ${(err as Error).message}`);
+          }
+        }
+        counts[t.name] = rows.length;
+      }
+      return { version, tables: Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b))) };
+    });
+  }
+
+  /** The data tables, without SQLite's and the Durable Object's own (sqlite_*, _cf_*, schema_version). */
+  private tables(): TableInfo[] {
+    const names = this.sql.all<{ name: string }>(`SELECT name FROM sqlite_master WHERE type = 'table'
+      AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND name NOT LIKE '\\_cf\\_%' ESCAPE '\\' AND name != 'schema_version' ORDER BY name`);
+    return names.map(({ name }) => {
+      const info = this.sql.all<{ name: string; pk: number }>("SELECT name, pk FROM pragma_table_info(?)", name);
+      const fks = this.sql.all<{ table: string; from: string; to: string | null }>(
+        `SELECT "table", "from", "to" FROM pragma_foreign_key_list(?)`, name);
+      const pk = info.filter((c) => c.pk > 0).sort((a, b) => a.pk - b.pk).map((c) => c.name);
+      return { name, columns: info.map((c) => c.name), pk, fks: fks.map((f) => ({ ...f, to: f.to ?? pk[0]! })) };
+    });
+  }
+
   // --- internals ---
 
   /** A defer's end: absent/null means until undeferred; otherwise a future ISO time. */
@@ -1073,6 +1135,63 @@ export class Store {
     this.sql.run("UPDATE gigs SET status = 'in_progress', claimed_by = ?, claimed_at = ?, claim_expires_at = ?, updated_at = ? WHERE id = ?", actor, now, this.expiry(), now, id);
     return this.mustGet(id);
   }
+}
+
+type Row = Record<string, SqlValue>;
+/** A whole database, as GET /admin/export returns it and POST /admin/import takes it. */
+export interface Dump {
+  version: number;
+  tables: Record<string, Row[]>;
+}
+interface TableInfo { name: string; columns: string[]; pk: string[]; fks: { table: string; from: string; to: string }[] }
+
+const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
+
+function isDump(dump: unknown): dump is Dump {
+  if (typeof dump !== "object" || dump === null) return false;
+  const { version, tables } = dump as Partial<Dump>;
+  if (!Number.isInteger(version) || typeof tables !== "object" || tables === null || Array.isArray(tables)) return false;
+  return Object.values(tables).every((rows) => Array.isArray(rows) && rows.every((row) =>
+    typeof row === "object" && row !== null && !Array.isArray(row)
+    && Object.values(row).every((v) => v === null || typeof v === "string" || typeof v === "number")));
+}
+
+/** Tables ordered so that every table comes after the tables it references (cycles: as they come). */
+function referencedFirst(tables: TableInfo[]): TableInfo[] {
+  const order: TableInfo[] = [];
+  const visiting = new Set<string>();
+  const visit = (t: TableInfo) => {
+    if (order.includes(t) || visiting.has(t.name)) return;
+    visiting.add(t.name);
+    for (const fk of t.fks) {
+      const target = tables.find((other) => other.name === fk.table);
+      if (target && target !== t) visit(target);
+    }
+    order.push(t);
+  };
+  tables.forEach(visit);
+  return order;
+}
+
+/** For a table that references itself (gigs.parent), rows ordered so that a referenced row goes in first. */
+function referencedRowsFirst(t: TableInfo, rows: Row[]): Row[] {
+  const self = t.fks.filter((fk) => fk.table === t.name);
+  if (!self.length) return rows;
+  const ordered: Row[] = [];
+  const present = new Set<string>();
+  let pending = rows;
+  while (pending.length) {
+    const ready = pending.filter((row) => self.every((fk) => row[fk.from] === null || row[fk.from] === undefined
+      || row[fk.from] === row[fk.to] || present.has(`${fk.to}\0${row[fk.from]}`)));
+    // No progress: a dangling or cyclic reference; inserting fails with the foreign key error.
+    const batch = ready.length ? ready : pending;
+    for (const row of batch) {
+      ordered.push(row);
+      for (const fk of self) present.add(`${fk.to}\0${row[fk.to]}`);
+    }
+    pending = pending.filter((row) => !batch.includes(row));
+  }
+  return ordered;
 }
 
 export function sha256(text: string): string {

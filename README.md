@@ -92,6 +92,12 @@ bun scripts/deploy.ts [--secret]              # without one: the same through th
 `scripts/deploy.ts` deploys the committed `HEAD` and, with `--secret`, sets the admin token from
 `~/.config/gigs/admin-token`.
 
+To move a whole database between servers (either kind), with the admin token: `GET /admin/export`
+returns `{version, tables: {<table>: [rows]}}` (schema version, every row as stored), and
+`POST /admin/import` with that body loads it in one transaction, keeping ids, counters, timestamps
+and claims. Import refuses (409) unless the target has no rows and the same schema version; it
+answers `{version, tables: {<table>: <rows imported>}}`.
+
 ## Installing `gig`
 
 From a checkout, after `bun install`, either run `bun link` (uses the `bin` entry in
