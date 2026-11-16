@@ -18,7 +18,7 @@ const GLOBAL_OPTIONS = {
   help: { type: "boolean", short: "h" },
 } satisfies Options;
 
-const LABEL_FILTER_OPTIONS = { label: { type: "string" }, "exclude-label": { type: "string" } } satisfies Options;
+const FILTER_OPTIONS = { label: { type: "string" }, "exclude-label": { type: "string" }, "human-only": { type: "boolean" } } satisfies Options;
 
 interface Ctx {
   args: string[];
@@ -35,6 +35,8 @@ interface Command {
   usage: string;
   summary: string;
   options?: Options;
+  /** Accept `--no-<flag>` for boolean options. */
+  allowNegative?: boolean;
   run(ctx: Ctx): Promise<void>;
 }
 
@@ -87,8 +89,8 @@ const COMMANDS: Record<string, Command> = {
   },
 
   create: {
-    usage: "create <title> [-t type] [-p 0-4] [-d desc|-] [--parent id] [--blocked-by id[,id]] [--discovered-from id] [--spec id] [--label l[,l]]",
-    summary: "create a boon (`-d -` reads the description from stdin; with --spec, in the spec's project)",
+    usage: "create <title> [-t type] [-p 0-4] [-d desc|-] [--parent id] [--blocked-by id[,id]] [--discovered-from id] [--spec id] [--label l[,l]] [--human-only]",
+    summary: "create a boon (`-d -` reads the description from stdin; with --spec, in the spec's project; --human-only: a human boon, never handed out by `bn claim` without an id)",
     options: {
       type: { type: "string", short: "t" },
       priority: { type: "string", short: "p" },
@@ -98,6 +100,7 @@ const COMMANDS: Record<string, Command> = {
       "discovered-from": { type: "string" },
       spec: { type: "string" },
       label: { type: "string" },
+      "human-only": { type: "boolean" },
     },
     async run({ args, values, json, print, client, project }) {
       const title = args.join(" ");
@@ -113,6 +116,7 @@ const COMMANDS: Record<string, Command> = {
         discovered_from: values["discovered-from"] as string | undefined,
         spec: values.spec as string | undefined,
         labels: labelList(values.label),
+        human: values["human-only"] === true ? true : undefined,
       });
       if (json) return print(boon, row);
       console.log(boon.id);
@@ -120,15 +124,15 @@ const COMMANDS: Record<string, Command> = {
   },
 
   list: {
-    usage: "list [--all] [--status s[,s]] [--type t] [--parent id] [--spec id] [--label l[,l]] [--exclude-label l[,l]]",
-    summary: "list boons (default: unfinished; --label: has all of them, --exclude-label: has none of them)",
+    usage: "list [--all] [--status s[,s]] [--type t] [--parent id] [--spec id] [--label l[,l]] [--exclude-label l[,l]] [--human-only]",
+    summary: "list boons (default: unfinished; --label: has all of them, --exclude-label: has none of them; --human-only: only human boons)",
     options: {
       all: { type: "boolean" },
       status: { type: "string" },
       type: { type: "string" },
       parent: { type: "string" },
       spec: { type: "string" },
-      ...LABEL_FILTER_OPTIONS,
+      ...FILTER_OPTIONS,
     },
     async run({ values, json, print, client, project }) {
       const boons = await client().listBoons(project(), {
@@ -137,7 +141,7 @@ const COMMANDS: Record<string, Command> = {
         parent: values.parent as string | undefined,
         type: values.type as string | undefined,
         spec: values.spec as string | undefined,
-        ...labelQuery(values),
+        ...filterQuery(values),
       });
       if (json) return print(boons, (list) => list.map(row));
       console.log(boons.length ? rows(boons) : "no boons");
@@ -145,11 +149,11 @@ const COMMANDS: Record<string, Command> = {
   },
 
   ready: {
-    usage: "ready [--spec id] [--label l[,l]] [--exclude-label l[,l]]",
-    summary: "ready boons in priority order",
-    options: { spec: { type: "string" }, ...LABEL_FILTER_OPTIONS },
+    usage: "ready [--spec id] [--label l[,l]] [--exclude-label l[,l]] [--human-only]",
+    summary: "ready boons in priority order (--human-only: only human boons, the human's queue)",
+    options: { spec: { type: "string" }, ...FILTER_OPTIONS },
     async run({ values, json, print, client, project }) {
-      const boons = await client().ready(project(), values.spec as string | undefined, labelQuery(values));
+      const boons = await client().ready(project(), values.spec as string | undefined, filterQuery(values));
       if (json) return print(boons, (list) => list.map(row));
       console.log(boons.length ? rows(boons) : "no ready boons");
     },
@@ -210,8 +214,8 @@ const COMMANDS: Record<string, Command> = {
   },
 
   update: {
-    usage: "update <id> [--title t] [-d desc|-] [-t type] [-p n] [--parent id|none] [--spec id|none] [--add-label l[,l]] [--remove-label l[,l]]",
-    summary: "change a boon's fields (`none` clears the parent or spec)",
+    usage: "update <id> [--title t] [-d desc|-] [-t type] [-p n] [--parent id|none] [--spec id|none] [--add-label l[,l]] [--remove-label l[,l]] [--human-only|--no-human-only]",
+    summary: "change a boon's fields (`none` clears the parent or spec; --human-only makes it a human boon, --no-human-only makes it an ordinary one)",
     options: {
       title: { type: "string" },
       description: { type: "string", short: "d" },
@@ -221,7 +225,9 @@ const COMMANDS: Record<string, Command> = {
       spec: { type: "string" },
       "add-label": { type: "string" },
       "remove-label": { type: "string" },
+      "human-only": { type: "boolean" },
     },
+    allowNegative: true,
     async run({ args, values, json, print, client }) {
       const id = arg(args, 0, "id");
       const changes: BoonChangesInput = {
@@ -233,6 +239,7 @@ const COMMANDS: Record<string, Command> = {
         spec: values.spec === "none" ? null : (values.spec as string | undefined),
         add_labels: labelList(values["add-label"]),
         remove_labels: labelList(values["remove-label"]),
+        human: values["human-only"] as boolean | undefined,
       };
       if (Object.values(changes).every((v) => v === undefined)) throw new Error("nothing to update (see `bn update --help`)");
       const boon = await client().update(id, changes);
@@ -255,7 +262,7 @@ const COMMANDS: Record<string, Command> = {
 
   claim: {
     usage: "claim [id] [--spec id]",
-    summary: "claim the given boon, or the next ready one (--spec: next ready within that spec; not with an id)",
+    summary: "claim the given boon, or the next ready one that is not a human boon (--spec: next ready within that spec; not with an id)",
     options: { spec: { type: "string" } },
     async run({ args, values, json, full, print, client, project }) {
       if (args[0] && values.spec !== undefined) throw new Error("--spec only works with `bn claim` without an id");
@@ -491,6 +498,7 @@ export async function main(argv: string[]) {
       args: rest,
       options: { ...GLOBAL_OPTIONS, ...command.options },
       allowPositionals: true,
+      allowNegative: command.allowNegative === true,
       strict: true,
     });
   } catch (err) {
@@ -565,8 +573,8 @@ function labelList(value: unknown): string[] | undefined {
   return typeof value === "string" ? value.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
 }
 
-function labelQuery(values: Values) {
-  return { label: values.label as string | undefined, exclude_label: values["exclude-label"] as string | undefined };
+function filterQuery(values: Values) {
+  return { label: values.label as string | undefined, exclude_label: values["exclude-label"] as string | undefined, human: values["human-only"] === true };
 }
 
 function arg(args: string[], i: number, name: string): string {
@@ -629,7 +637,7 @@ function row(b: Boon) {
   const claimed = b.status === "in_progress";
   return compact({
     id: b.id, title: b.title, type: b.type, priority: b.priority, status: b.status, parent: b.parent, spec: b.spec,
-    labels: b.labels, claimed_by: claimed ? b.claimed_by : null, claim_expires_at: claimed ? b.claim_expires_at : null,
+    labels: b.labels, human: b.human || null, claimed_by: claimed ? b.claimed_by : null, claim_expires_at: claimed ? b.claim_expires_at : null,
     defer_until: b.defer_until, close_reason: b.status === "closed" ? b.close_reason : null,
   });
 }
@@ -648,7 +656,7 @@ function compactShow(detail: BoonDetail) {
     if (n) closed[key] = n;
   }
   return compact({
-    id: b.id, title: b.title, type: b.type, priority: b.priority, status: b.status, spec: b.spec, labels: b.labels, description: b.description,
+    id: b.id, title: b.title, type: b.type, priority: b.priority, status: b.status, spec: b.spec, labels: b.labels, human: b.human || null, description: b.description,
     ready: open ? ready : null, reasons: open && !ready ? reasons : null,
     claimed_by: claimed ? b.claimed_by : null, claim_expires_at: claimed ? b.claim_expires_at : null,
     defer_until: b.defer_until,
@@ -670,7 +678,7 @@ function rows(boons: Boon[]): string {
         b.status.padEnd(11),
         b.type.padEnd(7),
         b.title + (b.claimed_by ? `  [@${b.claimed_by}]` : "") + (b.defer_until ? `  [until ${b.defer_until}]` : "") +
-          (b.labels.length ? `  [${b.labels.join(", ")}]` : ""),
+          (b.labels.length ? `  [${b.labels.join(", ")}]` : "") + (b.human ? "  [human]" : ""),
       ].join("  "),
     )
     .join("\n");
@@ -692,7 +700,7 @@ function showCompactDetail(detail: BoonDetail): string {
   }
   if (b.status === "deferred") status = `deferred${b.defer_until ? ` until ${shortTime(b.defer_until)}` : ""}`;
   if (b.status === "closed") status = `closed by ${b.closed_by}${b.close_reason ? `: ${b.close_reason}` : ""}`;
-  const lines = [`${b.id}  ${b.title}`, `${b.type} · P${b.priority} · ${status}`];
+  const lines = [`${b.id}  ${b.title}`, `${b.type} · P${b.priority} · ${status}${b.human ? " · human only" : ""}`];
   if (b.spec) lines.push(`spec: ${b.spec}`);
   if (b.labels.length) lines.push(`labels: ${b.labels.join(", ")}`);
   if (detail.parent) lines.push(`parent: ${detail.parent.id} ${detail.parent.title}`);
@@ -730,6 +738,7 @@ function showDetail(detail: BoonDetail): string {
   field("priority", `P${b.priority}`);
   if (b.spec) field("spec", b.spec);
   if (b.labels.length) field("labels", b.labels.join(", "));
+  if (b.human) field("human", "only a human works it");
   field("created", `${b.created_at} by ${b.created_by}`);
   field("updated", b.updated_at);
   if (b.closed_at) field("closed", `${b.closed_at} by ${b.closed_by}${b.close_reason ? `: ${b.close_reason}` : ""}`);

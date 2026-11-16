@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { BoonsError, Store, validClaimTtl, type LabelFilter } from "./store";
+import { BoonsError, Store, validClaimTtl, type ReadyFilter } from "./store";
 
 export interface HandlerOptions {
   token?: string;
@@ -65,14 +65,14 @@ async function route(store: Store, req: Request, token: string | undefined): Pro
         type: q.get("type") ?? undefined,
         parent: q.get("parent") ?? undefined,
         spec: q.get("spec") ?? undefined,
-        ...labelFilter(q),
+        ...readyFilter(q),
         all: q.get("all") === "1" || q.get("all") === "true",
       });
     }
     case "POST /projects/:/boons":
       return json(store.createBoon(param, actor, await readBody(req)), 201);
     case "GET /projects/:/ready":
-      return store.ready(param, url.searchParams.get("spec") ?? undefined, labelFilter(url.searchParams));
+      return store.ready(param, url.searchParams.get("spec") ?? undefined, readyFilter(url.searchParams));
     case "GET /projects/:/blocked":
       return store.blocked(param, url.searchParams.get("spec") ?? undefined);
     case "POST /projects/:/specs":
@@ -121,10 +121,10 @@ async function route(store: Store, req: Request, token: string | undefined): Pro
   throw new BoonsError("not_found", `no route for ${req.method} ${url.pathname}`, 404);
 }
 
-/** `?label=a,b&exclude_label=c` as a label filter. */
-function labelFilter(q: URLSearchParams): LabelFilter {
+/** `?label=a,b&exclude_label=c&human=1` as a filter. */
+function readyFilter(q: URLSearchParams): ReadyFilter {
   const list = (name: string) => q.get(name)?.split(",").map((s) => s.trim()).filter(Boolean);
-  return { label: list("label"), exclude_label: list("exclude_label") };
+  return { label: list("label"), exclude_label: list("exclude_label"), human: q.get("human") === "1" || q.get("human") === "true" };
 }
 
 async function readBody(req: Request): Promise<Record<string, unknown>> {

@@ -23,6 +23,8 @@ export interface Boon {
   spec: string | null;
   /** Sorted; inert markers that never affect readiness or claims. */
   labels: string[];
+  /** Only a human works it: claiming the next ready boon never hands it out. */
+  human: boolean;
   claimed_by: string | null;
   claimed_at: string | null;
   claim_expires_at: string | null;
@@ -103,6 +105,7 @@ export interface NewBoon {
   discovered_from?: unknown;
   spec?: unknown;
   labels?: unknown;
+  human?: unknown;
 }
 
 export interface NewSpec {
@@ -120,8 +123,9 @@ export interface BoonChanges {
   spec?: unknown;
   add_labels?: unknown;
   remove_labels?: unknown;
+  human?: unknown;
 }
-const CHANGEABLE = ["title", "description", "type", "priority", "parent", "spec", "add_labels", "remove_labels"];
+const CHANGEABLE = ["title", "description", "type", "priority", "parent", "spec", "add_labels", "remove_labels", "human"];
 
 /** Only boons with all of `label` and none of `exclude_label`. */
 export interface LabelFilter {
@@ -129,7 +133,12 @@ export interface LabelFilter {
   exclude_label?: string[];
 }
 
-export interface ListFilter extends LabelFilter {
+/** A label filter; with `human`, only human boons. */
+export interface ReadyFilter extends LabelFilter {
+  human?: boolean;
+}
+
+export interface ListFilter extends ReadyFilter {
   status?: string[];
   type?: string;
   all?: boolean;
@@ -244,12 +253,15 @@ const MIGRATIONS = [
   );
   CREATE INDEX labels_label ON labels(label);
   `,
+  `
+  ALTER TABLE boons ADD COLUMN human INTEGER NOT NULL DEFAULT 0 CHECK (human IN (0, 1));
+  `,
 ];
 
 const PROJECT_COLUMNS = "prefix, name, created_at";
 const BOON_COLUMNS =
   "id, project, title, description, type, priority, status, claimed_by, claimed_at, claim_expires_at, defer_until, " +
-  "created_by, created_at, updated_at, closed_by, closed_at, close_reason, parent, spec, " +
+  "created_by, created_at, updated_at, closed_by, closed_at, close_reason, parent, spec, human, " +
   "(SELECT json_group_array(label) FROM labels WHERE boon_id = boons.id) AS labels";
 const SPEC_COLUMNS = "id, project, title, text, version, created_by, created_at";
 const COMMENT_COLUMNS = "id, boon_id, author, body, created_at";
@@ -335,6 +347,7 @@ export class Store {
       const discovered = input.discovered_from == null ? null : this.reference(input.discovered_from);
       const spec = input.spec == null ? null : this.specReference(input.spec, p.prefix);
       const labels = input.labels === undefined ? [] : checkLabels(input.labels, "labels");
+      const human = input.human === undefined ? false : checkHuman(input.human);
 
       const { next_number: n } = this.db
         .query("UPDATE projects SET next_number = next_number + 1 WHERE prefix = ? RETURNING next_number - 1 AS next_number")
@@ -347,7 +360,7 @@ export class Store {
            VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)`,
         )
         .run(id, p.prefix, n, title, description, type, priority, actor, now, now);
-      this.db.query("UPDATE boons SET parent = ?, spec = ? WHERE id = ?").run(parent, spec, id);
+      this.db.query("UPDATE boons SET parent = ?, spec = ?, human = ? WHERE id = ?").run(parent, spec, human ? 1 : 0, id);
       for (const target of blockers) this.insertLink(id, target, "blocks");
       if (discovered) this.insertLink(id, discovered, "discovered-from");
       this.changeLabels(id, labels, []);
@@ -398,6 +411,7 @@ export class Store {
       if (changes.priority !== undefined) sets.priority = checkPriority(changes.priority);
       if (changes.parent !== undefined) sets.parent = changes.parent === null ? null : this.reference(changes.parent);
       if (changes.spec !== undefined) sets.spec = changes.spec === null ? null : this.specReference(changes.spec, boon.project);
+      if (changes.human !== undefined) sets.human = checkHuman(changes.human) ? 1 : 0;
       const add = changes.add_labels === undefined ? undefined : checkLabels(changes.add_labels, "add_labels");
       const remove = changes.remove_labels === undefined ? undefined : checkLabels(changes.remove_labels, "remove_labels");
       const both = add?.filter((l) => remove?.includes(l)) ?? [];
@@ -465,14 +479,14 @@ export class Store {
         where.push("spec = ?");
         params.push(this.specReference(filter.spec, p.prefix));
       }
-      labelClauses(filter, where, params);
+      readyFilterClauses(filter, where, params);
       return this.boons(`SELECT ${BOON_COLUMNS} FROM boons WHERE ${where.join(" AND ")} ORDER BY priority, number`, ...params);
     });
   }
 
-  /** Ready boons of a project (only those pointing to `spec` and matching `labels`, if given), in the order they should be picked up. */
-  ready(project: string, spec?: unknown, labels: LabelFilter = {}): Boon[] {
-    return this.op(() => this.readyBoons(this.mustGetProject(project).prefix, spec, labels));
+  /** Ready boons of a project (only those pointing to `spec` and matching `filter`, if given), in the order they should be picked up. */
+  ready(project: string, spec?: unknown, filter: ReadyFilter = {}): Boon[] {
+    return this.op(() => this.readyBoons(this.mustGetProject(project).prefix, spec, filter));
   }
 
   blocked(project: string, spec?: unknown): { boon: Boon; reasons: Reason[] }[] {
@@ -620,11 +634,11 @@ export class Store {
     });
   }
 
-  /** Claims the first ready boon of the project (within `spec`, if given), or returns null if there is none. */
+  /** Claims the first ready boon of the project (within `spec`, if given) that is not a human boon, or returns null if there is none. */
   claimNext(project: string, actor: string, spec?: unknown): Boon | null {
     return this.op(() => {
       actor = checkActor(actor);
-      const [next] = this.readyBoons(this.mustGetProject(project).prefix, spec);
+      const next = this.readyBoons(this.mustGetProject(project).prefix, spec).find((boon) => !boon.human);
       return next ? this.claimBoon(next.id, actor) : null;
     });
   }
@@ -796,10 +810,10 @@ export class Store {
     return boon;
   }
 
-  /** Runs a query selecting BOON_COLUMNS, decoding each boon's labels. */
+  /** Runs a query selecting BOON_COLUMNS, decoding each boon's labels and human flag. */
   private boons(sql: string, ...params: (string | number)[]): Boon[] {
-    const rows = this.db.query(sql).all(...params) as (Omit<Boon, "labels"> & { labels: string })[];
-    return rows.map((row) => ({ ...row, labels: (JSON.parse(row.labels) as string[]).sort() }));
+    const rows = this.db.query(sql).all(...params) as (Omit<Boon, "labels" | "human"> & { labels: string; human: number })[];
+    return rows.map((row) => ({ ...row, human: row.human === 1, labels: (JSON.parse(row.labels) as string[]).sort() }));
   }
 
   /** Adding a present label or removing a missing one is a no-op. */
@@ -896,22 +910,22 @@ export class Store {
     return { ready: boon.status === "open" && reasons.length === 0, reasons };
   }
 
-  /** Boons of the project in pickup order; with `spec`, only those pointing to it; with `labels`, only those matching. */
-  private orderedBoons(prefix: string, spec?: unknown, labels: LabelFilter = {}): Boon[] {
+  /** Boons of the project in pickup order; with `spec`, only those pointing to it; with `filter`, only those matching. */
+  private orderedBoons(prefix: string, spec?: unknown, filter: ReadyFilter = {}): Boon[] {
     const where = ["project = ?"];
     const params: string[] = [prefix];
     if (spec !== undefined) {
       where.push("spec = ?");
       params.push(this.specReference(spec, prefix));
     }
-    labelClauses(labels, where, params);
+    readyFilterClauses(filter, where, params);
     return this.boons(`SELECT ${BOON_COLUMNS} FROM boons WHERE ${where.join(" AND ")} ${READY_ORDER}`, ...params);
   }
 
-  /** Readiness is always derived from the whole graph, so a blocker outside the spec or label filter still blocks. */
-  private readyBoons(prefix: string, spec?: unknown, labels?: LabelFilter): Boon[] {
+  /** Readiness is always derived from the whole graph, so a blocker outside the spec or filter still blocks. */
+  private readyBoons(prefix: string, spec?: unknown, filter?: ReadyFilter): Boon[] {
     const graph = this.graph();
-    return this.orderedBoons(prefix, spec, labels).filter((boon) => this.readiness(boon, graph).ready);
+    return this.orderedBoons(prefix, spec, filter).filter((boon) => this.readiness(boon, graph).ready);
   }
 
   private claimBoon(id: string, actor: string): Boon {
@@ -986,6 +1000,18 @@ function labelClauses(filter: LabelFilter, where: string[], params: (string | nu
     where.push(`NOT EXISTS (${has} IN (${excluded.map(() => "?").join(", ")}))`);
     params.push(...excluded);
   }
+}
+
+/** Appends SQL conditions for labels and, with `human`, only human boons. */
+function readyFilterClauses(filter: ReadyFilter, where: string[], params: (string | number)[]) {
+  labelClauses(filter, where, params);
+  if (filter.human !== undefined && typeof filter.human !== "boolean") throw badRequest("human must be a boolean");
+  if (filter.human) where.push("human = 1");
+}
+
+function checkHuman(v: unknown): boolean {
+  if (typeof v !== "boolean") throw badRequest("human must be a boolean");
+  return v;
 }
 
 function checkSpecText(text: unknown): string {

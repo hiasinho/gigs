@@ -104,6 +104,11 @@ See [GLOSSARY.md](GLOSSARY.md) for the exact vocabulary.
   they never change ready, blocked or claiming, but `list` and `ready` can filter by them
   (`--label a,b`: all present; `--exclude-label a,b`: none present). Adding a present label or
   removing a missing one is a no-op; labels work on boons of any status, closed included.
+- **Human boons** are worked only by a human. `bn claim` without an id (also with `--spec`) never
+  hands one out and picks the next ready non-human boon instead. Otherwise they are like any boon:
+  they show in `ready`, anyone may claim one by id, they block and are blocked, and claims lapse.
+  Set with `bn create --human-only`, change with `bn update --human-only` / `--no-human-only` (any
+  status; counts as activity). `bn list --human-only` and `bn ready --human-only` show the human's queue.
 
 ## Specs
 
@@ -146,15 +151,25 @@ bn close ws-2 -r "API spec in docs/payments.md"
 bn ready                 # ws-4, then ws-3
 ```
 
+An agent waiting on a human decision files the question as a human boon that blocks its own boon,
+then stops or moves on. The human answers in a comment and closes it; the agent's boon is ready again.
+
+```sh
+bn create "Which payment provider?" --human-only -d "Stripe or Adyen? Context in ws-3."   # ws-5
+bn dep add ws-3 ws-5     # ws-5 blocks ws-3
+bn ready --human-only    # the human's queue: ws-5
+bn comment ws-5 "Stripe." --as alice && bn close ws-5 --as alice   # ws-3 becomes ready again
+```
+
 ## Commands
 
 ```
 bn serve                          bn init <prefix> [--name <name>]       bn projects
-bn create <title> [-t type] [-p 0-4] [-d desc|-] [--parent id] [--blocked-by id[,id]] [--discovered-from id] [--spec id] [--label l[,l]]
-bn list [--all] [--status s[,s]] [--type t] [--parent id] [--spec id] [--label l[,l]] [--exclude-label l[,l]]
-bn ready [--spec id] [--label l[,l]] [--exclude-label l[,l]]
+bn create <title> [-t type] [-p 0-4] [-d desc|-] [--parent id] [--blocked-by id[,id]] [--discovered-from id] [--spec id] [--label l[,l]] [--human-only]
+bn list [--all] [--status s[,s]] [--type t] [--parent id] [--spec id] [--label l[,l]] [--exclude-label l[,l]] [--human-only]
+bn ready [--spec id] [--label l[,l]] [--exclude-label l[,l]] [--human-only]
 bn blocked [--spec id]            bn show <id> [--full]
-bn update <id> [--title t] [-d desc|-] [-t type] [-p n] [--parent id|none] [--spec id|none] [--add-label l[,l]] [--remove-label l[,l]]
+bn update <id> [--title t] [-d desc|-] [-t type] [-p n] [--parent id|none] [--spec id|none] [--add-label l[,l]] [--remove-label l[,l]] [--human-only|--no-human-only]
 bn edit <id> --old text --new text   bn edit <id> -   # JSON array [{old,new}] on stdin
 bn dep add|rm <id> <target-id> [--kind blocks|related|discovered-from]   # default: target blocks id
 bn label add|rm <id> <label...>
@@ -184,9 +199,10 @@ silently dropping someone else's change. Text starting with `-` needs `--old=<te
 
 - Output defaults to one line of compact JSON with null and empty fields omitted:
   - `list`, `ready` and mutations (`create`, `update`, `edit`, `close`, `defer`, `dep add`, ...) print rows:
-    `{id, title, type, priority, status, parent?, spec?, labels?, claimed_by?, claim_expires_at?, defer_until?, close_reason?}`
+    `{id, title, type, priority, status, parent?, spec?, labels?, human?, claimed_by?, claim_expires_at?, defer_until?, close_reason?}`
+    (`human: true` only on human boons)
     (`close` with several ids prints an array); `blocked` adds `reasons: [{kind, id, via?}]`.
-  - `show` and `claim` print the boon with `labels?`, `description`, `ready`/`reasons` (open boons only),
+  - `show` and `claim` print the boon with `labels?`, `human?`, `description`, `ready`/`reasons` (open boons only),
     claim/close fields, `parent` and relations as `{id, title, status}` (unfinished only), `closed`
     counts per relation, and `comments: [{author, at, body}]`. `claim` prints `null` if nothing is ready.
   - `comment` prints `{boon_id, author, at, body}`.
@@ -201,6 +217,9 @@ silently dropping someone else's change. Text starting with `-` needs `--old=<te
 - Long tasks: run `bn heartbeat <id>` (or comment) more often than the claim TTL, or the claim
   lapses and someone else may pick the boon up.
 - File work you find but won't do with `--discovered-from <your boon>`.
+- Never claim a human boon (`human: true`) unless a human tells you to. When you need a human
+  decision, create a human boon that blocks your own (`--human-only`, then `bn dep add <yours> <new>`),
+  then stop or move on.
 - An agent skill lives at [.agents/skills/boons](.agents/skills/boons); `bn skill` prints it, so any agent
   can read it or install it into its own skills directory.
 

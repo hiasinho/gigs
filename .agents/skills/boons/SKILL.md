@@ -56,6 +56,16 @@ bn create "<title>" --label a,b
 bn list|ready --label a,b --exclude-label c            # all of a,b; none of c
 ```
 
+## Human boons
+`human: true` = only a human works it. `bn claim` (no id) never hands it out; it still shows in `ready`.
+Never claim one by id unless a human tells you to.
+Need a human decision? Create a human boon blocking your own, then stop or move on:
+```
+bn create "<question>" --human-only -d "<context>"   # → bn-50
+bn dep add <your-id> bn-50                           # bn-50 blocks yours; ready again once the human answers and closes it
+```
+`bn update <id> --human-only|--no-human-only` · `bn list|ready --human-only` (the human's queue)
+
 ## Other
 `show <id>` · `list [--all]` · `blocked` · `update <id> [--title t] [-d text|-] [-t type] [-p n] [--parent id|none]` · `dep add|rm <id> <blocker-id> [--kind related|discovered-from]` · `defer <id> [--until 4h|2d|YYYY-MM-DD]` · `undefer <id>` · `reopen <id>`
 

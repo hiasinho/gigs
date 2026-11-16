@@ -90,3 +90,7 @@ The condition of an open boon that is neither blocked nor has a deferred ancesto
 
 **Claim**:
 An actor's exclusive hold on a boon, which puts it in progress. A claim lapses when its holder shows no activity on the boon for a while.
+
+**Human boon**:
+A boon that only a human works. Claiming the next ready boon never hands it out; it can still be claimed by id, and is otherwise like any boon.
+_Avoid_: Manual, assignee

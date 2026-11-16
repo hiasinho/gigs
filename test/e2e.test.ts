@@ -404,7 +404,7 @@ test("errors, help and connection failures", async () => {
   expect(help.stdout).toContain("bn defer <id> [--until");
   expect(help.stdout.split("\n").every((line) => line.length <= 80)).toBe(true);
   expect((await bn(["help"])).stdout).toBe(help.stdout);
-  expect(help.stdout).toContain("  bn ready [--spec id] [--label l[,l]] [--exclude-label l[,l]]\n    ready boons in priority order\n");
+  expect(help.stdout).toContain("  bn ready [--spec id] [--label l[,l]] [--exclude-label l[,l]] [--human-only]\n    ready boons in priority order (--human-only: only human boons, the human's\n    queue)\n");
   expect((await bn(["show", "--help"])).stdout).toBe("usage: bn show <id> [--full]\n\nshow a compact boon (--full shows everything)\n");
   const createHelp = await bn(["create", "--help"]);
   expect(createHelp.code).toBe(0);
@@ -564,6 +564,38 @@ test("labels through the real CLI: create, label add|rm, update, filters, rows, 
   expect((await bn(["show", a.id, "--human"], opts)).stdout).toContain("\nlabels: agent, ready-for-agent\n");
   expect((await bn(["show", a.id, "--human", "--full"], opts)).stdout).toContain("\nlabels:    agent, ready-for-agent\n");
   expect((await bn(["list", "--human"], opts)).stdout).toBe(`${a.id}  P2  open         task     Triage me  [agent, ready-for-agent]\n`);
+});
+
+test("human boons through the real CLI: --human-only on create, list, ready; update sets and clears; claim-next skips", async () => {
+  store.createProject("hx");
+  const opts = { env: { BN_PROJECT: "hx" } };
+  const mine = await bnJson(["create", "My work"], opts);
+  expect(mine).not.toHaveProperty("human");
+  const ask = await bnJson(["create", "Which API version?", "--human-only", "-p", "0"], opts);
+  expect(ask).toEqual({ id: "hx-2", title: "Which API version?", type: "task", priority: 0, status: "open", human: true });
+  // The agent's boon waits on the human's answer.
+  await bnJson(["dep", "add", mine.id, ask.id], opts);
+  const ids = async (args: string[]) => (await bnJson(args, opts)).map((x: any) => x.id);
+  expect(await ids(["ready"])).toEqual([ask.id]);
+  expect(await ids(["ready", "--human-only"])).toEqual([ask.id]);
+  expect(await bnJson(["claim"], opts)).toBeNull();
+  await bnJson(["comment", ask.id, "Use v2."], { ...opts, env: { ...opts.env, BN_ACTOR: "human" } });
+  await bnJson(["close", ask.id], { ...opts, env: { ...opts.env, BN_ACTOR: "human" } });
+  expect(await bnJson(["claim"], opts)).toMatchObject({ id: mine.id, claimed_by: "agent-1" });
+
+  expect(await bnJson(["update", mine.id, "--human-only"], opts)).toMatchObject({ id: mine.id, human: true });
+  expect(await ids(["list", "--human-only"])).toEqual([mine.id]);
+  expect(await bnJson(["show", mine.id], opts)).toMatchObject({ id: mine.id, human: true });
+  expect((await bnJson(["show", mine.id, "--full"], opts)).boon.human).toBe(true);
+  expect((await bn(["show", mine.id, "--human"], opts)).stdout).toContain(" · human only\n");
+  expect((await bn(["show", mine.id, "--human", "--full"], opts)).stdout).toContain("\nhuman:     only a human works it\n");
+  expect((await bn(["list", "--human"], opts)).stdout).toBe(`${mine.id}  P2  in_progress  task     My work  [@agent-1]  [human]\n`);
+  const cleared = await bnJson(["update", mine.id, "--no-human-only"], opts);
+  expect(cleared).not.toHaveProperty("human");
+  expect(await ids(["list", "--human-only"])).toEqual([]);
+  // --no-human-only is only for update; --human-only takes no value.
+  expect((await bn(["create", "x", "--no-human-only"], opts)).code).toBe(1);
+  expect((await bn(["update", mine.id, "--human-only=yes"], opts)).code).toBe(1);
 });
 
 test("edit through CLI: --old/--new, JSON on stdin, row, human and raw output, errors", async () => {

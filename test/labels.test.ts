@@ -141,7 +141,7 @@ describe("migration 6", () => {
     store.claim(held.id, "holder");
     store.dispose();
     const db = new Database(path);
-    db.run("DROP TABLE labels; PRAGMA user_version = 5;");
+    db.run("ALTER TABLE boons DROP COLUMN human; DROP TABLE labels; PRAGMA user_version = 5;");
     db.close();
     store = new Store({ path, now: () => clock, claimTtlMinutes: 30 });
     expect(store.getBoon(held.id)).toMatchObject({ title: "held", claimed_by: "holder", labels: [] });

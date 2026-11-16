@@ -16,6 +16,7 @@ export interface NewBoonInput {
   discovered_from?: string;
   spec?: string;
   labels?: string[];
+  human?: boolean;
 }
 
 export interface BoonChangesInput {
@@ -27,15 +28,17 @@ export interface BoonChangesInput {
   spec?: string | null;
   add_labels?: string[];
   remove_labels?: string[];
+  human?: boolean;
 }
 
-/** Comma-separated; all of `label` and none of `exclude_label` must be present. */
-export interface LabelQuery {
+/** Comma-separated; all of `label` and none of `exclude_label` must be present. `human`: only human boons. */
+export interface ReadyQuery {
   label?: string;
   exclude_label?: string;
+  human?: boolean;
 }
 
-export interface ListQuery extends LabelQuery {
+export interface ListQuery extends ReadyQuery {
   status?: string;
   type?: string;
   all?: boolean;
@@ -70,6 +73,7 @@ export class Client {
     if (query.spec) q.set("spec", query.spec);
     if (query.label) q.set("label", query.label);
     if (query.exclude_label) q.set("exclude_label", query.exclude_label);
+    if (query.human) q.set("human", "1");
     if (query.all) q.set("all", "1");
     const qs = q.size ? `?${q}` : "";
     return this.request<Boon[]>("GET", `/projects/${enc(project)}/boons${qs}`);
@@ -79,11 +83,12 @@ export class Client {
     return this.request<Boon>("POST", `/projects/${enc(project)}/boons`, input);
   }
 
-  ready(project: string, spec?: string, labels: LabelQuery = {}) {
+  ready(project: string, spec?: string, filter: ReadyQuery = {}) {
     const q = new URLSearchParams();
     if (spec !== undefined) q.set("spec", spec);
-    if (labels.label) q.set("label", labels.label);
-    if (labels.exclude_label) q.set("exclude_label", labels.exclude_label);
+    if (filter.label) q.set("label", filter.label);
+    if (filter.exclude_label) q.set("exclude_label", filter.exclude_label);
+    if (filter.human) q.set("human", "1");
     return this.request<Boon[]>("GET", `/projects/${enc(project)}/ready${q.size ? `?${q}` : ""}`);
   }
 

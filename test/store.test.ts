@@ -5,9 +5,9 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { BoonsError, Store } from "../src/store";
 
-/** Removes migrations 6, 5 and 4, leaving a v3 database. */
+/** Removes migrations 7, 6, 5 and 4, leaving a v3 database. */
 const DROP_MIGRATION_4 =
-  "DROP TABLE labels; DROP TABLE spec_versions; ALTER TABLE specs DROP COLUMN version; DROP INDEX boons_spec; ALTER TABLE boons DROP COLUMN spec; ALTER TABLE projects DROP COLUMN next_spec_number; DROP TABLE specs;";
+  "ALTER TABLE boons DROP COLUMN human; DROP TABLE labels; DROP TABLE spec_versions; ALTER TABLE specs DROP COLUMN version; DROP INDEX boons_spec; ALTER TABLE boons DROP COLUMN spec; ALTER TABLE projects DROP COLUMN next_spec_number; DROP TABLE specs;";
 
 let dir: string;
 let store: Store;
@@ -250,7 +250,7 @@ describe("migrations", () => {
     expect(again.getBoon("bn-1").title).toBe("x");
     again.dispose();
     const db = new Database(join(dir, "boons.db"));
-    expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+    expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 7 });
     db.close();
   });
 });

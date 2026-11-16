@@ -233,6 +233,25 @@ test("label routes: set on create, change via PATCH, filter list and ready by qu
   expect((await call("GET", "/projects/lb/ready?label=Nope")).status).toBe(400);
 });
 
+test("human routes: set on create and via PATCH, filter list and ready, claim-next skips them", async () => {
+  store.createProject("hu");
+  const post = (path: string, body: unknown) => call("POST", path, { actor: "a", body: JSON.stringify(body) });
+  const h = (await (await post("/projects/hu/boons", { title: "ask", human: true, priority: 0 })).json()) as any;
+  expect(h.human).toBe(true);
+  const b = (await (await post("/projects/hu/boons", { title: "work" })).json()) as any;
+  expect(b.human).toBe(false);
+  expect((await post("/projects/hu/boons", { title: "x", human: "yes" })).status).toBe(400);
+  const ids = async (path: string) => ((await (await call("GET", path)).json()) as any[]).map((x) => x.id);
+  expect(await ids("/projects/hu/boons?human=1")).toEqual([h.id]);
+  expect(await ids("/projects/hu/ready?human=true")).toEqual([h.id]);
+  expect(await ids("/projects/hu/ready")).toEqual([h.id, b.id]);
+  expect(await (await post("/projects/hu/claim", {})).json()).toMatchObject({ id: b.id });
+  expect(await (await post("/projects/hu/claim", {})).json()).toBeNull();
+  const patched = await call("PATCH", `/boons/${h.id}`, { actor: "a", body: JSON.stringify({ human: false }) });
+  expect(await patched.json()).toMatchObject({ human: false });
+  expect(await (await post("/projects/hu/claim", {})).json()).toMatchObject({ id: h.id });
+});
+
 test("boon edit route: find/replace on the description, validation and conflicts", async () => {
   store.createProject("be");
   const boon = store.createBoon("be", "a", { title: "Edit me", description: "one two two" });
