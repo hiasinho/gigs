@@ -12,8 +12,8 @@ writeFileSync(`${goFile}.${actor}`, "");
 while (!existsSync(goFile)) await Bun.sleep(1);
 
 const claimed: string[] = [];
-for (let boon = store.claimNext("bn", actor); boon; boon = store.claimNext("bn", actor)) {
-  claimed.push(boon.id);
+for (let gig = store.claimNext("gig", actor); gig; gig = store.claimNext("gig", actor)) {
+  claimed.push(gig.id);
   // Yield briefly, like an agent doing work. In a tight loop one process re-takes the
   // write lock before the others' busy handlers wake, so it would claim everything alone.
   await Bun.sleep(1);

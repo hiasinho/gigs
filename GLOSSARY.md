@@ -1,39 +1,39 @@
-# Boons
+# Gigs
 
-Boons is a small, self-hosted ticket system that coding agents and humans talk to over the network, to create, pick up, and close units of work.
+Gigs is a small, self-hosted ticket system that coding agents and humans talk to over the network, to create, pick up, and close units of work.
 
 ## Language
 
-### Boons and projects
+### Gigs and projects
 
-**Boon**:
-A single unit of tracked work. Every boon belongs to exactly one project.
+**Gig**:
+A single unit of tracked work. Every gig belongs to exactly one project.
 _Avoid_: Ticket, issue, bead
 
 **Project**:
-A body of work, usually one repository, whose boons are tracked together.
+A body of work, usually one repository, whose gigs are tracked together.
 _Avoid_: Repo, workspace, board
 
 **Prefix**:
-A short code of 2–3 characters that identifies a project and begins the IDs of its boons.
+A short code of 2–3 characters that identifies a project and begins the IDs of its gigs.
 
 **Type**:
-The kind of work a boon represents: bug, feature, task, epic, or chore.
+The kind of work a gig represents: bug, feature, task, epic, or chore.
 _Avoid_: Kind, category
 
 **Priority**:
-How urgent a boon is, from 0 (critical) to 4 (backlog).
+How urgent a gig is, from 0 (critical) to 4 (backlog).
 
 **Actor**:
 The name an agent or human acts under. Every claim, close, and comment records its actor.
 _Avoid_: User, assignee, owner
 
 **Comment**:
-A note an actor adds to a boon over time, such as progress or a handoff.
+A note an actor adds to a gig over time, such as progress or a handoff.
 _Avoid_: Note, message
 
 **Label**:
-A free-form marker on a boon, such as `wontfix` or `triage:needs-info`, written in lowercase without spaces. A boon has any number of labels, closed or not. Labels are inert: they never change whether a boon is ready, blocked, or claimable; they only help to find boons.
+A free-form marker on a gig, such as `wontfix` or `triage:needs-info`, written in lowercase without spaces. A gig has any number of labels, closed or not. Labels are inert: they never change whether a gig is ready, blocked, or claimable; they only help to find gigs.
 _Avoid_: Tag, category
 
 ### Status
@@ -49,35 +49,35 @@ Deliberately set aside for later: never ready, until someone undefers it or unti
 _Avoid_: Draft, backlog, icebox, snoozed
 
 **Closed**:
-Finished, whether done or abandoned. A closed boon may carry a reason and can be reopened.
+Finished, whether done or abandoned. A closed gig may carry a reason and can be reopened.
 _Avoid_: Done, resolved, completed
 
 **Unfinished**:
-Any boon that is not closed, whatever its other status.
+Any gig that is not closed, whatever its other status.
 
 ### Structure
 
 **Blocker**:
-A boon that must be closed before another boon can be ready. "A blocks B" means A is a blocker of B.
+A gig that must be closed before another gig can be ready. "A blocks B" means A is a blocker of B.
 _Avoid_: Dependency (ambiguous about direction), prerequisite
 
 **Blocked**:
-The condition of an unfinished boon that has an unfinished blocker, an unfinished child, or an ancestor with an unfinished blocker. Never set by hand.
+The condition of an unfinished gig that has an unfinished blocker, an unfinished child, or an ancestor with an unfinished blocker. Never set by hand.
 
 **Parent**:
-A boon that another boon belongs to as part of a larger piece of work. A boon has at most one parent. A parent's unfinished children block it, and the parent's blockers also block all of its descendants.
+A gig that another gig belongs to as part of a larger piece of work. A gig has at most one parent. A parent's unfinished children block it, and the parent's blockers also block all of its descendants.
 
 **Related**:
-A link between two boons that informs but never blocks.
+A link between two gigs that informs but never blocks.
 
 **Discovered from**:
-A link from a boon to the boon whose work turned it up.
+A link from a gig to the gig whose work turned it up.
 
 **Plan**:
-A set of boons connected by blockers. A plan is not a separate thing in Boons; it exists only as those connections.
+A set of gigs connected by blockers. A plan is not a separate thing in Gigs; it exists only as those connections.
 
 **Spec**:
-An agreement about a body of work, kept in Boons, that boons can point to. A boon points to at most one spec, of its own project, and pointing to one changes nothing about whether the boon is ready.
+An agreement about a body of work, kept in Gigs, that gigs can point to. A gig points to at most one spec, of its own project, and pointing to one changes nothing about whether the gig is ready.
 _Avoid_: Document, requirements
 
 **Version**:
@@ -86,11 +86,11 @@ A numbered state of a spec; every change makes a new one.
 ### Picking up work
 
 **Ready**:
-The condition of an open boon that is neither blocked nor has a deferred ancestor.
+The condition of an open gig that is neither blocked nor has a deferred ancestor.
 
 **Claim**:
-An actor's exclusive hold on a boon, which puts it in progress. A claim lapses when its holder shows no activity on the boon for a while.
+An actor's exclusive hold on a gig, which puts it in progress. A claim lapses when its holder shows no activity on the gig for a while.
 
-**Human boon**:
-A boon that only a human works. Claiming the next ready boon never hands it out; it can still be claimed by id, and is otherwise like any boon.
+**Human gig**:
+A gig that only a human works. Claiming the next ready gig never hands it out; it can still be claimed by id, and is otherwise like any gig.
 _Avoid_: Manual, assignee

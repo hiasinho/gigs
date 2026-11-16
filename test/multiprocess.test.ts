@@ -6,12 +6,12 @@ import { Store } from "../src/store";
 
 const CLAIMER = join(import.meta.dir, "fixtures", "claimer.ts");
 const PROCESSES = 4;
-const BOONS = 100;
+const GIGS = 100;
 
 let dir: string;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "boons-multiproc-"));
+  dir = mkdtempSync(join(tmpdir(), "gigs-multiproc-"));
 });
 
 afterEach(() => {
@@ -19,13 +19,13 @@ afterEach(() => {
 });
 
 test(
-  "separate processes claiming from one DB file never claim the same boon",
+  "separate processes claiming from one DB file never claim the same gig",
   async () => {
-    const path = join(dir, "boons.db");
+    const path = join(dir, "gigs.db");
     const goFile = join(dir, "go");
     const seed = new Store({ path });
-    seed.createProject("bn");
-    for (let i = 0; i < BOONS; i++) seed.createBoon("bn", "seed", { title: `boon ${i}` });
+    seed.createProject("gig");
+    for (let i = 0; i < GIGS; i++) seed.createGig("gig", "seed", { title: `gig ${i}` });
     seed.dispose();
 
     // Start every process before awaiting any; they block on the go-file so they race together.
@@ -54,12 +54,12 @@ test(
 
     const all = perProcess.flat();
     expect(new Set(all).size).toBe(all.length);
-    expect(all.sort()).toEqual(Array.from({ length: BOONS }, (_, i) => `bn-${i + 1}`).sort());
+    expect(all.sort()).toEqual(Array.from({ length: GIGS }, (_, i) => `gig-${i + 1}`).sort());
     // The claimers really interleaved: more than one process got work.
     expect(perProcess.filter((ids) => ids.length > 0).length).toBeGreaterThan(1);
 
     const check = new Store({ path });
-    expect(check.ready("bn")).toEqual([]);
+    expect(check.ready("gig")).toEqual([]);
     check.dispose();
   },
   15_000,

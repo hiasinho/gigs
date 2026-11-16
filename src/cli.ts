@@ -2,9 +2,9 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
-import { Client, type BoonChangesInput } from "./client";
+import { Client, type GigChangesInput } from "./client";
 import { configFromEnv, serve } from "./server";
-import { BoonsError, formatReasons as reasonText, type Boon, type BoonDetail, type BoonSummary, type LinkKind, type Project, type Spec, type TextEdit } from "./store";
+import { GigsError, formatReasons as reasonText, type Gig, type GigDetail, type GigSummary, type LinkKind, type Project, type Spec, type TextEdit } from "./store";
 
 type Options = NonNullable<ParseArgsConfig["options"]>;
 type Values = Record<string, string | boolean | undefined>;
@@ -44,17 +44,17 @@ interface Command {
 const COMMANDS: Record<string, Command> = {
   serve: {
     usage: "serve",
-    summary: "start the server (env: BOONS_HOST, BOONS_PORT, BOONS_DB, BOONS_TOKEN, BOONS_CLAIM_TTL_MINUTES)",
+    summary: "start the server (env: GIGS_HOST, GIGS_PORT, GIGS_DB, GIGS_TOKEN, GIGS_CLAIM_TTL_MINUTES)",
     async run() {
       const config = configFromEnv();
       const server = serve(config);
-      console.log(`boons listening on ${server.url} (db: ${config.db})`);
+      console.log(`gigs listening on ${server.url} (db: ${config.db})`);
     },
   },
 
   init: {
     usage: "init <prefix> [--name <name>]",
-    summary: "create the project if missing (else just link it) and write ./.boons.json",
+    summary: "create the project if missing (else just link it) and write ./.gigs.json",
     options: { name: { type: "string" } },
     async run({ args, values, json, print, client }) {
       const prefix = arg(args, 0, "prefix");
@@ -64,16 +64,16 @@ const COMMANDS: Record<string, Command> = {
       try {
         project = await c.createProject(prefix, values.name as string | undefined);
       } catch (err) {
-        if (!(err instanceof BoonsError && err.code === "conflict")) throw err;
+        if (!(err instanceof GigsError && err.code === "conflict")) throw err;
         project = await c.getProject(prefix);
         created = false;
         if (values.name !== undefined && values.name !== project.name) {
           console.error(`warning: project ${project.prefix} already exists as "${project.name}"; --name ignored`);
         }
       }
-      writeFileSync(".boons.json", JSON.stringify({ project: project.prefix }, null, 2) + "\n");
+      writeFileSync(".gigs.json", JSON.stringify({ project: project.prefix }, null, 2) + "\n");
       if (json) return print(project);
-      console.log(`${created ? "created" : "linked existing"} project ${project.prefix} (${project.name}); wrote .boons.json`);
+      console.log(`${created ? "created" : "linked existing"} project ${project.prefix} (${project.name}); wrote .gigs.json`);
     },
   },
 
@@ -91,7 +91,7 @@ const COMMANDS: Record<string, Command> = {
 
   create: {
     usage: "create <title> [-t type] [-p 0-4] [-d desc|-] [--parent id] [--blocked-by id[,id]] [--discovered-from id] [--spec id] [--label l[,l]] [--human-only]",
-    summary: "create a boon (`-d -` reads the description from stdin; with --spec, in the spec's project; --human-only: a human boon, never handed out by `bn claim` without an id)",
+    summary: "create a gig (`-d -` reads the description from stdin; with --spec, in the spec's project; --human-only: a human gig, never handed out by `gig claim` without an id)",
     options: {
       type: { type: "string", short: "t" },
       priority: { type: "string", short: "p" },
@@ -107,7 +107,7 @@ const COMMANDS: Record<string, Command> = {
       const title = args.join(" ");
       if (!title.trim()) throw new Error("missing <title>");
       const description = await readText(values.description as string | undefined);
-      const boon = await client().createBoon(project(), {
+      const gig = await client().createGig(project(), {
         title,
         description,
         type: values.type as string | undefined,
@@ -119,14 +119,14 @@ const COMMANDS: Record<string, Command> = {
         labels: labelList(values.label),
         human: values["human-only"] === true ? true : undefined,
       });
-      if (json) return print(boon, row);
-      console.log(boon.id);
+      if (json) return print(gig, row);
+      console.log(gig.id);
     },
   },
 
   list: {
     usage: "list [--all] [--status s[,s]] [--type t] [--parent id] [--spec id] [--label l[,l]] [--exclude-label l[,l]] [--human-only]",
-    summary: "list boons (default: unfinished; --parent: direct children only; --label: has all of them, --exclude-label: has none of them; --human-only: only human boons)",
+    summary: "list gigs (default: unfinished; --parent: direct children only; --label: has all of them, --exclude-label: has none of them; --human-only: only human gigs)",
     options: {
       all: { type: "boolean" },
       status: { type: "string" },
@@ -136,7 +136,7 @@ const COMMANDS: Record<string, Command> = {
       ...FILTER_OPTIONS,
     },
     async run({ values, json, print, client, project }) {
-      const boons = await client().listBoons(project(), {
+      const gigs = await client().listGigs(project(), {
         all: values.all as boolean | undefined,
         status: values.status as string | undefined,
         parent: values.parent as string | undefined,
@@ -144,30 +144,30 @@ const COMMANDS: Record<string, Command> = {
         spec: values.spec as string | undefined,
         ...filterQuery(values),
       });
-      if (json) return print(boons, (list) => list.map(row));
-      console.log(boons.length ? rows(boons) : "no boons");
+      if (json) return print(gigs, (list) => list.map(row));
+      console.log(gigs.length ? rows(gigs) : "no gigs");
     },
   },
 
   ready: {
     usage: "ready [--spec id] [--parent id] [--label l[,l]] [--exclude-label l[,l]] [--human-only]",
-    summary: "ready boons in priority order (--parent: the whole subtree, i.e. all descendants, not the boon itself; --human-only: only human boons, the human's queue)",
+    summary: "ready gigs in priority order (--parent: the whole subtree, i.e. all descendants, not the gig itself; --human-only: only human gigs, the human's queue)",
     options: { spec: { type: "string" }, parent: { type: "string" }, ...FILTER_OPTIONS },
     async run({ values, json, print, client, project }) {
-      const boons = await client().ready(project(), values.spec as string | undefined, { ...filterQuery(values), parent: values.parent as string | undefined });
-      if (json) return print(boons, (list) => list.map(row));
-      console.log(boons.length ? rows(boons) : "no ready boons");
+      const gigs = await client().ready(project(), values.spec as string | undefined, { ...filterQuery(values), parent: values.parent as string | undefined });
+      if (json) return print(gigs, (list) => list.map(row));
+      console.log(gigs.length ? rows(gigs) : "no ready gigs");
     },
   },
 
   blocked: {
     usage: "blocked [--spec id]",
-    summary: "blocked boons with reasons",
+    summary: "blocked gigs with reasons",
     options: { spec: { type: "string" } },
     async run({ values, json, print, client, project }) {
       const blocked = await client().blocked(project(), values.spec as string | undefined);
-      if (json) return print(blocked, (list) => list.map(({ boon, reasons }) => ({ ...row(boon), reasons })));
-      console.log(blocked.length ? blocked.map(({ boon, reasons }) => `${rows([boon])}\n  ${reasonText(reasons)}`).join("\n") : "no blocked boons");
+      if (json) return print(blocked, (list) => list.map(({ gig, reasons }) => ({ ...row(gig), reasons })));
+      console.log(blocked.length ? blocked.map(({ gig, reasons }) => `${rows([gig])}\n  ${reasonText(reasons)}`).join("\n") : "no blocked gigs");
     },
   },
 
@@ -177,15 +177,15 @@ const COMMANDS: Record<string, Command> = {
     options: { kind: { type: "string" } },
     async run({ args, values, json, print, client }) {
       const action = arg(args, 0, "add|rm");
-      if (action !== "add" && action !== "rm") throw new Error("expected `bn dep add` or `bn dep rm`");
+      if (action !== "add" && action !== "rm") throw new Error("expected `gig dep add` or `gig dep rm`");
       const id = arg(args, 1, "id");
       const target = arg(args, 2, "target-id");
       const kind = (values.kind as string | undefined) ?? "blocks";
       const c = client();
       const detail = action === "add" ? await c.addLink(id, target, kind) : await c.removeLink(id, target, kind);
-      if (json) return print(detail, (d) => row(d.boon));
+      if (json) return print(detail, (d) => row(d.gig));
       const phrase = { blocks: "blocked by", related: "related to", "discovered-from": "discovered from" }[kind as LinkKind];
-      console.log(`${detail.boon.id} is ${action === "add" ? "now" : "no longer"} ${phrase} ${target.toLowerCase()}`);
+      console.log(`${detail.gig.id} is ${action === "add" ? "now" : "no longer"} ${phrase} ${target.toLowerCase()}`);
     },
   },
 
@@ -194,21 +194,21 @@ const COMMANDS: Record<string, Command> = {
     summary: "add or remove labels: inert markers, lowercase without spaces, e.g. needs-triage or triage:needs-info (adding a present or removing a missing label is a no-op; any status)",
     async run({ args, json, print, client }) {
       const action = arg(args, 0, "add|rm");
-      if (action !== "add" && action !== "rm") throw new Error("expected `bn label add` or `bn label rm`");
+      if (action !== "add" && action !== "rm") throw new Error("expected `gig label add` or `gig label rm`");
       const id = arg(args, 1, "id");
       const labels = labelList(args.slice(2).join(","));
       if (!labels?.length) throw new Error("missing <label>");
-      const boon = await client().update(id, action === "add" ? { add_labels: labels } : { remove_labels: labels });
-      if (json) return print(boon, row);
-      console.log(`${boon.id} labels: ${boon.labels.join(", ") || "none"}`);
+      const gig = await client().update(id, action === "add" ? { add_labels: labels } : { remove_labels: labels });
+      if (json) return print(gig, row);
+      console.log(`${gig.id} labels: ${gig.labels.join(", ") || "none"}`);
     },
   },
 
   show: {
     usage: "show <id> [--full]",
-    summary: "show a compact boon (--full shows everything)",
+    summary: "show a compact gig (--full shows everything)",
     async run({ args, json, full, print, client }) {
-      const detail = await client().getBoon(arg(args, 0, "id"));
+      const detail = await client().getGig(arg(args, 0, "id"));
       if (json) return print(detail, compactShow);
       console.log(full ? showDetail(detail) : showCompactDetail(detail));
     },
@@ -216,7 +216,7 @@ const COMMANDS: Record<string, Command> = {
 
   update: {
     usage: "update <id> [--title t] [-d desc|-] [-t type] [-p n] [--parent id|none] [--spec id|none] [--add-label l[,l]] [--remove-label l[,l]] [--human-only|--no-human-only]",
-    summary: "change a boon's fields (`none` clears the parent or spec; --human-only makes it a human boon, --no-human-only makes it an ordinary one)",
+    summary: "change a gig's fields (`none` clears the parent or spec; --human-only makes it a human gig, --no-human-only makes it an ordinary one)",
     options: {
       title: { type: "string" },
       description: { type: "string", short: "d" },
@@ -231,7 +231,7 @@ const COMMANDS: Record<string, Command> = {
     allowNegative: true,
     async run({ args, values, json, print, client }) {
       const id = arg(args, 0, "id");
-      const changes: BoonChangesInput = {
+      const changes: GigChangesInput = {
         title: values.title as string | undefined,
         description: await readText(values.description as string | undefined),
         type: values.type as string | undefined,
@@ -242,79 +242,79 @@ const COMMANDS: Record<string, Command> = {
         remove_labels: labelList(values["remove-label"]),
         human: values["human-only"] as boolean | undefined,
       };
-      if (Object.values(changes).every((v) => v === undefined)) throw new Error("nothing to update (see `bn update --help`)");
-      const boon = await client().update(id, changes);
-      if (json) return print(boon, row);
-      console.log(`updated ${boon.id}`);
+      if (Object.values(changes).every((v) => v === undefined)) throw new Error("nothing to update (see `gig update --help`)");
+      const gig = await client().update(id, changes);
+      if (json) return print(gig, row);
+      console.log(`updated ${gig.id}`);
     },
   },
 
   edit: {
     usage: "edit <id> --old text --new text | edit <id> -",
-    summary: "replace exact text in a boon's description; each old text must occur exactly once (`-` reads a JSON array of {old,new} from stdin)",
+    summary: "replace exact text in a gig's description; each old text must occur exactly once (`-` reads a JSON array of {old,new} from stdin)",
     options: { old: { type: "string" }, new: { type: "string" } },
     async run({ args, values, json, print, client }) {
       const id = arg(args, 0, "id");
-      const boon = await client().editBoon(id, await readEdits(args.slice(1), values, "edit"));
-      if (json) return print(boon, row);
-      console.log(`edited ${boon.id}`);
+      const gig = await client().editGig(id, await readEdits(args.slice(1), values, "edit"));
+      if (json) return print(gig, row);
+      console.log(`edited ${gig.id}`);
     },
   },
 
   claim: {
     usage: "claim [id] | claim [--spec id] [--parent id] [--label l[,l]] [--exclude-label l[,l]]",
-    summary: "claim the given boon, or the first boon of `bn ready` with the same filters that is not a human boon (--parent: the whole subtree; filters only without an id)",
+    summary: "claim the given gig, or the first gig of `gig ready` with the same filters that is not a human gig (--parent: the whole subtree; filters only without an id)",
     options: { spec: { type: "string" }, parent: { type: "string" }, ...LABEL_OPTIONS },
     async run({ args, values, json, full, print, client, project }) {
       const filters = ["spec", "parent", "label", "exclude-label"].filter((f) => values[f] !== undefined);
       if (args[0] && filters.length) {
-        throw new Error(`${filters.map((f) => `--${f}`).join(", ")} only work${filters.length === 1 ? "s" : ""} with \`bn claim\` without an id`);
+        throw new Error(`${filters.map((f) => `--${f}`).join(", ")} only work${filters.length === 1 ? "s" : ""} with \`gig claim\` without an id`);
       }
       const c = client();
-      const boon = args[0] ? await c.claim(args[0]) : await c.claimNext(project(), values.spec as string | undefined, {
+      const gig = args[0] ? await c.claim(args[0]) : await c.claimNext(project(), values.spec as string | undefined, {
         label: values.label as string | undefined,
         exclude_label: values["exclude-label"] as string | undefined,
         parent: values.parent as string | undefined,
       });
-      if (json) return print(boon && !full ? compactShow(await c.getBoon(boon.id)) : boon);
-      console.log(boon ? `claimed ${boon.id}: ${boon.title}` : "no ready boons");
+      if (json) return print(gig && !full ? compactShow(await c.getGig(gig.id)) : gig);
+      console.log(gig ? `claimed ${gig.id}: ${gig.title}` : "no ready gigs");
     },
   },
 
   unclaim: {
     usage: "unclaim <id>",
-    summary: "release the claim on a boon",
+    summary: "release the claim on a gig",
     async run({ args, json, print, client }) {
-      const boon = await client().unclaim(arg(args, 0, "id"));
-      if (json) return print(boon, row);
-      console.log(`unclaimed ${boon.id}`);
+      const gig = await client().unclaim(arg(args, 0, "id"));
+      if (json) return print(gig, row);
+      console.log(`unclaimed ${gig.id}`);
     },
   },
 
   heartbeat: {
     usage: "heartbeat <id>",
-    summary: "renew your claim on a boon",
+    summary: "renew your claim on a gig",
     async run({ args, json, print, client }) {
-      const boon = await client().heartbeat(arg(args, 0, "id"));
-      if (json) return print(boon, row);
-      console.log(`claim on ${boon.id} renewed until ${boon.claim_expires_at}`);
+      const gig = await client().heartbeat(arg(args, 0, "id"));
+      if (json) return print(gig, row);
+      console.log(`claim on ${gig.id} renewed until ${gig.claim_expires_at}`);
     },
   },
 
   close: {
     usage: "close <id...> [-r reason] [--force]",
-    summary: "close one or more boons",
+    summary: "close one or more gigs",
     options: { reason: { type: "string", short: "r" }, force: { type: "boolean" } },
     async run({ args, values, json, print, client }) {
       arg(args, 0, "id");
       const c = client();
-      const closed: Boon[] = [];
+      const closed: Gig[] = [];
       let failed = false;
       for (const id of args) {
         try {
-          const boon = await c.close(id, values.reason as string | undefined, values.force === true);
-          closed.push(boon);
-          if (!json) console.log(`closed ${boon.id}`);
+          const gig = await c.close(id, values.reason as string | undefined, values.force === true);
+          closed.push(gig);
+          if (!json) console.log(`closed ${gig.id}`);
         } catch (err) {
           if (args.length === 1) throw err;
           console.error(`error: ${errorMessage(err)}`);
@@ -331,51 +331,51 @@ const COMMANDS: Record<string, Command> = {
 
   reopen: {
     usage: "reopen <id>",
-    summary: "reopen a closed boon",
+    summary: "reopen a closed gig",
     async run({ args, json, print, client }) {
-      const boon = await client().reopen(arg(args, 0, "id"));
-      if (json) return print(boon, row);
-      console.log(`reopened ${boon.id}`);
+      const gig = await client().reopen(arg(args, 0, "id"));
+      if (json) return print(gig, row);
+      console.log(`reopened ${gig.id}`);
     },
   },
   defer: {
     usage: "defer <id> [--until <ISO time|YYYY-MM-DD|30m|4h|2d>]",
-    summary: "set a boon aside (clears its claim), optionally until a time",
+    summary: "set a gig aside (clears its claim), optionally until a time",
     options: { until: { type: "string" } },
     async run({ args, values, json, print, client }) {
       const until = values.until === undefined ? undefined : parseUntil(values.until as string);
-      const boon = await client().defer(arg(args, 0, "id"), until);
-      if (json) return print(boon, row);
-      console.log(`deferred ${boon.id}${boon.defer_until ? ` until ${boon.defer_until}` : ""}`);
+      const gig = await client().defer(arg(args, 0, "id"), until);
+      if (json) return print(gig, row);
+      console.log(`deferred ${gig.id}${gig.defer_until ? ` until ${gig.defer_until}` : ""}`);
     },
   },
 
   undefer: {
     usage: "undefer <id>",
-    summary: "make a deferred boon open again",
+    summary: "make a deferred gig open again",
     async run({ args, json, print, client }) {
-      const boon = await client().undefer(arg(args, 0, "id"));
-      if (json) return print(boon, row);
-      console.log(`undeferred ${boon.id}`);
+      const gig = await client().undefer(arg(args, 0, "id"));
+      if (json) return print(gig, row);
+      console.log(`undeferred ${gig.id}`);
     },
   },
 
   comment: {
     usage: "comment <id> <text|->",
-    summary: "add a comment to a boon (`-` reads it from stdin)",
+    summary: "add a comment to a gig (`-` reads it from stdin)",
     async run({ args, json, print, client }) {
       const id = arg(args, 0, "id");
       const text = await readText(args.slice(1).join(" "));
       if (!text?.trim()) throw new Error("missing <text>");
       const comment = await client().comment(id, text);
-      if (json) return print(comment, (c) => ({ boon_id: c.boon_id, author: c.author, at: c.created_at, body: c.body }));
-      console.log(`commented on ${comment.boon_id}`);
+      if (json) return print(comment, (c) => ({ gig_id: c.gig_id, author: c.author, at: c.created_at, body: c.body }));
+      console.log(`commented on ${comment.gig_id}`);
     },
   },
 
   spec: {
     usage: "spec create <title> -d text|- | spec update <id> [--title t] [-d text|-] | spec edit <id> --old text --new text | spec edit <id> - | spec history <id> | spec show <id> [--version n] [--full] | spec list",
-    summary: "create, edit, show or list specs: agreements boons can point to (`-d -` reads the text from stdin)",
+    summary: "create, edit, show or list specs: agreements gigs can point to (`-d -` reads the text from stdin)",
     options: {
       description: { type: "string", short: "d" }, title: { type: "string" },
       old: { type: "string" }, new: { type: "string" }, version: { type: "string" },
@@ -388,18 +388,18 @@ const COMMANDS: Record<string, Command> = {
         const title = args.slice(1).join(" ");
         if (!title.trim()) throw new Error("missing <title>");
         const text = await readText(values.description as string | undefined);
-        if (!text?.trim()) throw new Error("missing text: pass -d <text> or -d - (see `bn spec --help`)");
+        if (!text?.trim()) throw new Error("missing text: pass -d <text> or -d - (see `gig spec --help`)");
         const spec = await client().createSpec(project(), title, text);
         if (json) return print(spec, specRow);
         return console.log(spec.id);
       }
       if (action === "update") {
-        if (args.length > 2) throw new Error("too many arguments (see `bn spec --help`)");
+        if (args.length > 2) throw new Error("too many arguments (see `gig spec --help`)");
         const changes: { title?: string; text?: string } = {};
         if (values.title !== undefined) changes.title = values.title as string;
         const text = await readText(values.description as string | undefined);
         if (text !== undefined) changes.text = text;
-        if (!Object.keys(changes).length) throw new Error("nothing to update: pass --title and/or -d (see `bn spec --help`)");
+        if (!Object.keys(changes).length) throw new Error("nothing to update: pass --title and/or -d (see `gig spec --help`)");
         const spec = await client().updateSpec(arg(args, 1, "id"), changes);
         if (json) return print(spec, specRow);
         return console.log(`updated ${spec.id}`);
@@ -411,7 +411,7 @@ const COMMANDS: Record<string, Command> = {
         return console.log(`edited ${spec.id} (version ${spec.version})`);
       }
       if (action === "history") {
-        if (args.length > 2) throw new Error("too many arguments (see `bn spec --help`)");
+        if (args.length > 2) throw new Error("too many arguments (see `gig spec --help`)");
         const history = await client().specHistory(arg(args, 1, "id"));
         if (json) return print(history);
         return console.log(history.map(({ version, by, at, kind, title, text, edits }) => [
@@ -422,7 +422,7 @@ const COMMANDS: Record<string, Command> = {
         ].join("\n")).join("\n"));
       }
       if (action === "show") {
-        if (args.length > 2) throw new Error("too many arguments (see `bn spec --help`)");
+        if (args.length > 2) throw new Error("too many arguments (see `gig spec --help`)");
         const version = values.version === undefined ? undefined : Number(values.version);
         if (version !== undefined && (!Number.isSafeInteger(version) || version < 1)) throw new Error("version must be a positive integer");
         const spec = await client().getSpec(arg(args, 1, "id"), version);
@@ -430,25 +430,25 @@ const COMMANDS: Record<string, Command> = {
         return console.log(showSpec(spec, full));
       }
       if (action === "list") {
-        if (args.length > 1) throw new Error("too many arguments (see `bn spec --help`)");
+        if (args.length > 1) throw new Error("too many arguments (see `gig spec --help`)");
         const specs = await client().listSpecs(project());
         if (json) return print(specs, (list) => list.map(specRow));
         return console.log(specs.length ? specs.map((s) => `${s.id}  ${s.title}`).join("\n") : "no specs");
       }
-      throw new Error("expected `bn spec create|update|edit|history|show|list`");
+      throw new Error("expected `gig spec create|update|edit|history|show|list`");
     },
   },
 
   skill: {
     usage: "skill",
-    summary: "print the agent skill (SKILL.md) that teaches the bn workflow",
+    summary: "print the agent skill (SKILL.md) that teaches the gig workflow",
     async run() {
       process.stdout.write(readFileSync(SKILL_PATH, "utf8"));
     },
   },
 };
 
-const SKILL_PATH = join(import.meta.dir, "../.agents/skills/boons/SKILL.md");
+const SKILL_PATH = join(import.meta.dir, "../.agents/skills/gigs/SKILL.md");
 
 function wrapHelp(text: string, indent: string, continuation = indent): string {
   const lines: string[] = [];
@@ -465,13 +465,13 @@ function wrapHelp(text: string, indent: string, continuation = indent): string {
 
 function usage() {
   const lines = Object.values(COMMANDS).map((c) =>
-    `${wrapHelp(`bn ${c.usage}`, "  ", "    ")}\n${wrapHelp(c.summary, "    ")}`,
+    `${wrapHelp(`gig ${c.usage}`, "  ", "    ")}\n${wrapHelp(c.summary, "    ")}`,
   );
-  return `bn - boons, a ticket system for coding agents
+  return `gig - gigs, a ticket system for coding agents
 
 usage:
 ${lines.join("\n")}
-  bn help | bn <command> --help
+  gig help | gig <command> --help
 
 output: compact JSON by default (one line, empty fields omitted)
 
@@ -479,13 +479,13 @@ global options:
   --human            print human-readable text instead of JSON
   --json             optional legacy flag (JSON is already the default)
   --full             raw API JSON; with --human: full show view
-  --as <actor>       act as <actor> (default: $BN_ACTOR, then $USER)
+  --as <actor>       act as <actor> (default: $GIG_ACTOR, then $USER)
   -P, --project <p>  project prefix
-                     (default: $BN_PROJECT, then nearest .boons.json)
+                     (default: $GIG_PROJECT, then nearest .gigs.json)
   --spec <id>        (create, list, ready, blocked, claim) the project comes
-                     from the spec id, overriding -P, $BN_PROJECT, .boons.json
+                     from the spec id, overriding -P, $GIG_PROJECT, .gigs.json
 
-env: BOONS_URL (default http://127.0.0.1:7357), BOONS_TOKEN`;
+env: GIGS_URL (default http://127.0.0.1:7357), GIGS_TOKEN`;
 }
 
 export async function main(argv: string[]) {
@@ -497,7 +497,7 @@ export async function main(argv: string[]) {
     return;
   }
   const command = COMMANDS[name];
-  if (!command) throw new Error(`unknown command '${name}' (see \`bn help\`)`);
+  if (!command) throw new Error(`unknown command '${name}' (see \`gig help\`)`);
 
   const rest = argv.filter((_, i) => i !== at);
   let parsed;
@@ -510,11 +510,11 @@ export async function main(argv: string[]) {
       strict: true,
     });
   } catch (err) {
-    throw new Error(`${errorMessage(err)} (see \`bn ${name} --help\`)`);
+    throw new Error(`${errorMessage(err)} (see \`gig ${name} --help\`)`);
   }
   const values = parsed.values as Values;
   if (values.help) {
-    console.log(`${wrapHelp(`usage: bn ${command.usage}`, "", "  ")}\n\n${wrapHelp(command.summary, "")}`);
+    console.log(`${wrapHelp(`usage: gig ${command.usage}`, "", "  ")}\n\n${wrapHelp(command.summary, "")}`);
     return;
   }
 
@@ -524,7 +524,7 @@ export async function main(argv: string[]) {
     reopen: 1, defer: 1, undefer: 1, skill: 0,
   };
   if (parsed.positionals.length > (maxArgs[name] ?? Infinity)) {
-    throw new Error(`too many arguments (see \`bn ${name} --help\`)`);
+    throw new Error(`too many arguments (see \`gig ${name} --help\`)`);
   }
 
   await command.run({
@@ -535,9 +535,9 @@ export async function main(argv: string[]) {
     print: (raw, shape) => console.log(JSON.stringify(shape && values.full !== true ? shape(raw) : raw)),
     client: () =>
       new Client({
-        url: process.env.BOONS_URL || "http://127.0.0.1:7357",
-        token: process.env.BOONS_TOKEN || undefined,
-        actor: (values.as as string | undefined) || process.env.BN_ACTOR || process.env.USER || "unknown",
+        url: process.env.GIGS_URL || "http://127.0.0.1:7357",
+        token: process.env.GIGS_TOKEN || undefined,
+        actor: (values.as as string | undefined) || process.env.GIG_ACTOR || process.env.USER || "unknown",
       }),
     project: () => specProject(values.spec) ?? resolveProject(values.project as string | undefined),
   });
@@ -555,9 +555,9 @@ function findCommand(argv: string[]): number {
 
 function resolveProject(flag: string | undefined): string {
   if (flag) return flag;
-  if (process.env.BN_PROJECT) return process.env.BN_PROJECT;
+  if (process.env.GIG_PROJECT) return process.env.GIG_PROJECT;
   for (let dir = process.cwd(); ; dir = dirname(dir)) {
-    const file = join(dir, ".boons.json");
+    const file = join(dir, ".gigs.json");
     if (existsSync(file)) {
       const project = JSON.parse(readFileSync(file, "utf8")).project;
       if (typeof project !== "string" || !project) throw new Error(`${file} has no "project"`);
@@ -565,10 +565,10 @@ function resolveProject(flag: string | undefined): string {
     }
     if (dirname(dir) === dir) break;
   }
-  throw new Error("no project: pass -P <prefix>, set BN_PROJECT, or run `bn init <prefix>` in your repo");
+  throw new Error("no project: pass -P <prefix>, set GIG_PROJECT, or run `gig init <prefix>` in your repo");
 }
 
-/** The project of a spec id like `bn-s3`, or undefined without a spec. */
+/** The project of a spec id like `gig-s3`, or undefined without a spec. */
 function specProject(spec: unknown): string | undefined {
   if (typeof spec !== "string") return undefined;
   const m = /^([a-z][a-z0-9]{1,2})-s\d+$/i.exec(spec.trim());
@@ -603,7 +603,7 @@ async function readEdits(rest: string[], values: Record<string, unknown>, comman
     try { return JSON.parse(await Bun.stdin.text()); }
     catch { throw new Error("stdin must be a JSON array of {old,new}"); }
   }
-  if (rest.length) throw new Error(`too many arguments (see \`bn ${command} --help\`)`);
+  if (rest.length) throw new Error(`too many arguments (see \`gig ${command} --help\`)`);
   if (values.old === undefined || values.new === undefined) throw new Error("pass --old and --new, or - for JSON edits on stdin");
   return [{ old: values.old as string, new: values.new as string }];
 }
@@ -640,8 +640,8 @@ function compact(obj: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => !empty(v)));
 }
 
-/** The compact JSON row of a boon (list, ready, blocked, mutations). */
-function row(b: Boon) {
+/** The compact JSON row of a gig (list, ready, blocked, mutations). */
+function row(b: Gig) {
   const claimed = b.status === "in_progress";
   return compact({
     id: b.id, title: b.title, type: b.type, priority: b.priority, status: b.status, parent: b.parent, spec: b.spec,
@@ -650,16 +650,16 @@ function row(b: Boon) {
   });
 }
 
-/** The compact JSON of `bn show`: unfinished relations listed, closed ones counted. */
-function compactShow(detail: BoonDetail) {
-  const { boon: b, ready, reasons } = detail;
+/** The compact JSON of `gig show`: unfinished relations listed, closed ones counted. */
+function compactShow(detail: GigDetail) {
+  const { gig: b, ready, reasons } = detail;
   const open = b.status === "open";
   const claimed = b.status === "in_progress";
-  const summary = ({ id, title, status }: BoonSummary) => ({ id, title, status });
+  const summary = ({ id, title, status }: GigSummary) => ({ id, title, status });
   const relations: Record<string, unknown> = {};
   const closed: Record<string, number> = {};
   for (const key of RELATIONS) {
-    relations[key] = detail[key].filter((boon) => boon.status !== "closed").map(summary);
+    relations[key] = detail[key].filter((gig) => gig.status !== "closed").map(summary);
     const n = detail[key].length - (relations[key] as unknown[]).length;
     if (n) closed[key] = n;
   }
@@ -676,9 +676,9 @@ function compactShow(detail: BoonDetail) {
   });
 }
 
-function rows(boons: Boon[]): string {
-  const w = Math.max(...boons.map((b) => b.id.length));
-  return boons
+function rows(gigs: Gig[]): string {
+  const w = Math.max(...gigs.map((b) => b.id.length));
+  return gigs
     .map((b) =>
       [
         b.id.padEnd(w),
@@ -699,8 +699,8 @@ function shortTime(value: string): string {
   return `${month} ${date.getDate()}${year} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
-function showCompactDetail(detail: BoonDetail): string {
-  const { boon: b, ready, reasons } = detail;
+function showCompactDetail(detail: GigDetail): string {
+  const { gig: b, ready, reasons } = detail;
   let status: string = b.status;
   if (b.status === "open") status = ready ? "ready" : "open";
   if (b.status === "in_progress") {
@@ -714,11 +714,11 @@ function showCompactDetail(detail: BoonDetail): string {
   if (detail.parent) lines.push(`parent: ${detail.parent.id} ${detail.parent.title}`);
   if (b.status === "open" && !ready) lines.push(`not ready: ${reasonText(reasons)}`);
   for (const key of RELATIONS) {
-    const unfinished = detail[key].filter((boon) => boon.status !== "closed");
+    const unfinished = detail[key].filter((gig) => gig.status !== "closed");
     const closed = detail[key].length - unfinished.length;
     const label = key.replace("_", " ");
     if (unfinished.length) {
-      lines.push(`${label}:`, ...unfinished.map((boon) => `  ${boon.id}  ${boon.status}  ${boon.title}`));
+      lines.push(`${label}:`, ...unfinished.map((gig) => `  ${gig.id}  ${gig.status}  ${gig.title}`));
       if (closed) lines.push(`  +${closed} closed`);
     } else if (closed) {
       lines.push(`${label}: ${closed} closed`);
@@ -735,8 +735,8 @@ function showCompactDetail(detail: BoonDetail): string {
   return lines.join("\n");
 }
 
-function showDetail(detail: BoonDetail): string {
-  const { boon: b, ready, reasons } = detail;
+function showDetail(detail: GigDetail): string {
+  const { gig: b, ready, reasons } = detail;
   const lines = [`${b.id}  ${b.title}`, ""];
   const field = (label: string, value: string) => lines.push(`${(label + ": ").padEnd(11)}${value}`);
   field("status", b.status + (ready ? " (ready)" : ""));
@@ -751,10 +751,10 @@ function showDetail(detail: BoonDetail): string {
   field("updated", b.updated_at);
   if (b.closed_at) field("closed", `${b.closed_at} by ${b.closed_by}${b.close_reason ? `: ${b.close_reason}` : ""}`);
   if (!ready) field("not ready", reasons.length ? reasonText(reasons) : `status is ${b.status}`);
-  const relation = (label: string, boons: BoonDetail["children"]) => {
-    if (!boons.length) return;
+  const relation = (label: string, gigs: GigDetail["children"]) => {
+    if (!gigs.length) return;
     lines.push(`${label}:`);
-    for (const boon of boons) lines.push(`  ${boon.id}  ${boon.status}  ${boon.title}`);
+    for (const gig of gigs) lines.push(`  ${gig.id}  ${gig.status}  ${gig.title}`);
   };
   if (detail.parent) relation("parent", [detail.parent]);
   for (const key of RELATIONS) {

@@ -1,4 +1,4 @@
-import { BoonsError, type Boon, type BoonDetail, type Comment, type Project, type Reason, type Spec, type TextEdit, type SpecHistory } from "./store";
+import { GigsError, type Gig, type GigDetail, type Comment, type Project, type Reason, type Spec, type TextEdit, type SpecHistory } from "./store";
 
 export interface ClientOptions {
   url: string;
@@ -6,7 +6,7 @@ export interface ClientOptions {
   actor: string;
 }
 
-export interface NewBoonInput {
+export interface NewGigInput {
   title: string;
   description?: string;
   type?: string;
@@ -19,7 +19,7 @@ export interface NewBoonInput {
   human?: boolean;
 }
 
-export interface BoonChangesInput {
+export interface GigChangesInput {
   title?: string;
   description?: string;
   type?: string;
@@ -37,12 +37,12 @@ export interface LabelQuery {
   exclude_label?: string;
 }
 
-/** A label query; `parent`: only that boon's descendants, the whole subtree (not the boon itself). */
+/** A label query; `parent`: only that gig's descendants, the whole subtree (not the gig itself). */
 export interface ClaimQuery extends LabelQuery {
   parent?: string;
 }
 
-/** A claim query; `human`: only human boons. */
+/** A claim query; `human`: only human gigs. */
 export interface ReadyQuery extends ClaimQuery {
   human?: boolean;
 }
@@ -76,7 +76,7 @@ export class Client {
     return this.request<Project>("GET", `/projects/${enc(prefix)}`);
   }
 
-  listBoons(project: string, query: ListQuery = {}) {
+  listGigs(project: string, query: ListQuery = {}) {
     const q = new URLSearchParams();
     if (query.status) q.set("status", query.status);
     if (query.type) q.set("type", query.type);
@@ -87,11 +87,11 @@ export class Client {
     if (query.human) q.set("human", "1");
     if (query.all) q.set("all", "1");
     const qs = q.size ? `?${q}` : "";
-    return this.request<Boon[]>("GET", `/projects/${enc(project)}/boons${qs}`);
+    return this.request<Gig[]>("GET", `/projects/${enc(project)}/gigs${qs}`);
   }
 
-  createBoon(project: string, input: NewBoonInput) {
-    return this.request<Boon>("POST", `/projects/${enc(project)}/boons`, input);
+  createGig(project: string, input: NewGigInput) {
+    return this.request<Gig>("POST", `/projects/${enc(project)}/gigs`, input);
   }
 
   ready(project: string, spec?: string, filter: ReadyQuery = {}) {
@@ -101,11 +101,11 @@ export class Client {
     if (filter.exclude_label) q.set("exclude_label", filter.exclude_label);
     if (filter.parent !== undefined) q.set("parent", filter.parent);
     if (filter.human) q.set("human", "1");
-    return this.request<Boon[]>("GET", `/projects/${enc(project)}/ready${q.size ? `?${q}` : ""}`);
+    return this.request<Gig[]>("GET", `/projects/${enc(project)}/ready${q.size ? `?${q}` : ""}`);
   }
 
   blocked(project: string, spec?: string) {
-    return this.request<{ boon: Boon; reasons: Reason[] }[]>("GET", `/projects/${enc(project)}/blocked${specQuery(spec)}`);
+    return this.request<{ gig: Gig; reasons: Reason[] }[]>("GET", `/projects/${enc(project)}/blocked${specQuery(spec)}`);
   }
 
   createSpec(project: string, title: string, text: string) {
@@ -133,66 +133,66 @@ export class Client {
   }
 
   addLink(id: string, target: string, kind: string) {
-    return this.request<BoonDetail>("POST", `/boons/${enc(id)}/links`, { target, kind });
+    return this.request<GigDetail>("POST", `/gigs/${enc(id)}/links`, { target, kind });
   }
 
   removeLink(id: string, target: string, kind: string) {
-    return this.request<BoonDetail>("DELETE", `/boons/${enc(id)}/links/${enc(kind)}/${enc(target)}`);
+    return this.request<GigDetail>("DELETE", `/gigs/${enc(id)}/links/${enc(kind)}/${enc(target)}`);
   }
 
-  /** Claims the next ready non-human boon matching the filters; label lists go to the server as arrays. */
+  /** Claims the next ready non-human gig matching the filters; label lists go to the server as arrays. */
   claimNext(project: string, spec?: string, filter: ClaimQuery = {}) {
     const body = { spec, label: list(filter.label), exclude_label: list(filter.exclude_label), parent: filter.parent };
     const empty = Object.values(body).every((v) => v === undefined);
-    return this.request<Boon | null>("POST", `/projects/${enc(project)}/claim`, empty ? undefined : body);
+    return this.request<Gig | null>("POST", `/projects/${enc(project)}/claim`, empty ? undefined : body);
   }
 
-  getBoon(id: string) {
-    return this.request<BoonDetail>("GET", `/boons/${enc(id)}`);
+  getGig(id: string) {
+    return this.request<GigDetail>("GET", `/gigs/${enc(id)}`);
   }
 
   claim(id: string) {
-    return this.request<Boon>("POST", `/boons/${enc(id)}/claim`);
+    return this.request<Gig>("POST", `/gigs/${enc(id)}/claim`);
   }
 
   unclaim(id: string) {
-    return this.request<Boon>("POST", `/boons/${enc(id)}/unclaim`);
+    return this.request<Gig>("POST", `/gigs/${enc(id)}/unclaim`);
   }
 
   close(id: string, reason?: string, force = false) {
-    return this.request<Boon>("POST", `/boons/${enc(id)}/close`, { reason, force });
+    return this.request<Gig>("POST", `/gigs/${enc(id)}/close`, { reason, force });
   }
 
   reopen(id: string) {
-    return this.request<Boon>("POST", `/boons/${enc(id)}/reopen`);
+    return this.request<Gig>("POST", `/gigs/${enc(id)}/reopen`);
   }
 
-  update(id: string, changes: BoonChangesInput) {
-    return this.request<Boon>("PATCH", `/boons/${enc(id)}`, changes);
+  update(id: string, changes: GigChangesInput) {
+    return this.request<Gig>("PATCH", `/gigs/${enc(id)}`, changes);
   }
 
-  editBoon(id: string, edits: TextEdit[]) {
-    return this.request<Boon>("POST", `/boons/${enc(id)}/edits`, { edits });
+  editGig(id: string, edits: TextEdit[]) {
+    return this.request<Gig>("POST", `/gigs/${enc(id)}/edits`, { edits });
   }
 
   heartbeat(id: string) {
-    return this.request<Boon>("POST", `/boons/${enc(id)}/heartbeat`);
+    return this.request<Gig>("POST", `/gigs/${enc(id)}/heartbeat`);
   }
 
   defer(id: string, until?: string) {
-    return this.request<Boon>("POST", `/boons/${enc(id)}/defer`, { until });
+    return this.request<Gig>("POST", `/gigs/${enc(id)}/defer`, { until });
   }
 
   undefer(id: string) {
-    return this.request<Boon>("POST", `/boons/${enc(id)}/undefer`);
+    return this.request<Gig>("POST", `/gigs/${enc(id)}/undefer`);
   }
 
   comment(id: string, body: string) {
-    return this.request<Comment>("POST", `/boons/${enc(id)}/comments`, { body });
+    return this.request<Comment>("POST", `/gigs/${enc(id)}/comments`, { body });
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const headers: Record<string, string> = { "X-Boons-Actor": this.opts.actor };
+    const headers: Record<string, string> = { "X-Gigs-Actor": this.opts.actor };
     if (this.opts.token) headers.Authorization = `Bearer ${this.opts.token}`;
     if (body !== undefined) headers["Content-Type"] = "application/json";
     let res: Response;
@@ -203,16 +203,16 @@ export class Client {
         body: body === undefined ? undefined : JSON.stringify(body),
       });
     } catch {
-      throw new BoonsError(
+      throw new GigsError(
         "unreachable",
-        `cannot reach boons server at ${this.opts.url} (is \`bn serve\` running?)`,
+        `cannot reach gigs server at ${this.opts.url} (is \`gig serve\` running?)`,
         0,
       );
     }
     const data = (await res.json().catch(() => null)) as any;
     if (!res.ok) {
       const error = data?.error;
-      throw new BoonsError(error?.code ?? "http_error", error?.message ?? `HTTP ${res.status}`, res.status, error?.reasons);
+      throw new GigsError(error?.code ?? "http_error", error?.message ?? `HTTP ${res.status}`, res.status, error?.reasons);
     }
     return data as T;
   }

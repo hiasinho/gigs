@@ -1,0 +1,5 @@
+interface:
+  display_name: "Gigs"
+  short_description: "Track, claim, and finish work with gig"
+policy:
+  allow_implicit_invocation: true

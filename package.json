@@ -1,9 +1,9 @@
 {
-  "name": "boons",
+  "name": "gigs",
   "private": true,
   "type": "module",
   "bin": {
-    "bn": "src/cli.ts"
+    "gig": "src/cli.ts"
   },
   "scripts": {
     "test": "bun test",

@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 
 export const TYPES = ["bug", "feature", "task", "epic", "chore"] as const;
 export const STATUSES = ["open", "in_progress", "deferred", "closed"] as const;
-export type BoonType = (typeof TYPES)[number];
+export type GigType = (typeof TYPES)[number];
 export type Status = (typeof STATUSES)[number];
 
 export interface Project {
@@ -11,19 +11,19 @@ export interface Project {
   created_at: string;
 }
 
-export interface Boon {
+export interface Gig {
   id: string;
   project: string;
   title: string;
   description: string;
-  type: BoonType;
+  type: GigType;
   priority: number;
   status: Status;
   parent: string | null;
   spec: string | null;
   /** Sorted; inert markers that never affect readiness or claims. */
   labels: string[];
-  /** Only a human works it: claiming the next ready boon never hands it out. */
+  /** Only a human works it: claiming the next ready gig never hands it out. */
   human: boolean;
   claimed_by: string | null;
   claimed_at: string | null;
@@ -37,7 +37,7 @@ export interface Boon {
   close_reason: string | null;
 }
 
-/** An agreement about a body of work that boons can point to. */
+/** An agreement about a body of work that gigs can point to. */
 export interface Spec {
   id: string;
   project: string;
@@ -48,7 +48,7 @@ export interface Spec {
   created_at: string;
 }
 
-/** An exact find/replace on a spec text or boon description. */
+/** An exact find/replace on a spec text or gig description. */
 export interface TextEdit { old: string; new: string }
 export interface SpecHistory {
   version: number;
@@ -60,42 +60,42 @@ export interface SpecHistory {
   edits?: TextEdit[];
 }
 
-/** Why an unfinished boon is blocked or has a deferred ancestor. */
+/** Why an unfinished gig is blocked or has a deferred ancestor. */
 export interface Reason {
   kind: "blocker" | "child" | "inherited" | "deferred_ancestor";
   id: string;
   via?: string;
 }
 
-export type BoonSummary = Pick<Boon, "id" | "title" | "status" | "type" | "priority">;
+export type GigSummary = Pick<Gig, "id" | "title" | "status" | "type" | "priority">;
 export const LINK_KINDS = ["blocks", "related", "discovered-from"] as const;
 export type LinkKind = (typeof LINK_KINDS)[number];
-interface Link { boon_id: string; target_id: string; kind: LinkKind }
-interface Graph { boons: Map<string, Boon>; links: Link[] }
+interface Link { gig_id: string; target_id: string; kind: LinkKind }
+interface Graph { gigs: Map<string, Gig>; links: Link[] }
 
 export interface Comment {
   id: number;
-  boon_id: string;
+  gig_id: string;
   author: string;
   body: string;
   created_at: string;
 }
 
-export interface BoonDetail {
-  boon: Boon;
+export interface GigDetail {
+  gig: Gig;
   ready: boolean;
   reasons: Reason[];
-  parent: BoonSummary | null;
-  children: BoonSummary[];
-  blockers: BoonSummary[];
-  blocks: BoonSummary[];
-  related: BoonSummary[];
-  discovered_from: BoonSummary[];
-  discovered: BoonSummary[];
+  parent: GigSummary | null;
+  children: GigSummary[];
+  blockers: GigSummary[];
+  blocks: GigSummary[];
+  related: GigSummary[];
+  discovered_from: GigSummary[];
+  discovered: GigSummary[];
   comments: Comment[];
 }
 
-export interface NewBoon {
+export interface NewGig {
   title?: unknown;
   description?: unknown;
   type?: unknown;
@@ -114,7 +114,7 @@ export interface NewSpec {
 }
 
 /** Fields `update` may change; absent fields are left alone. */
-export interface BoonChanges {
+export interface GigChanges {
   title?: unknown;
   description?: unknown;
   type?: unknown;
@@ -127,34 +127,34 @@ export interface BoonChanges {
 }
 const CHANGEABLE = ["title", "description", "type", "priority", "parent", "spec", "add_labels", "remove_labels", "human"];
 
-/** Only boons with all of `label` and none of `exclude_label`. */
+/** Only gigs with all of `label` and none of `exclude_label`. */
 export interface LabelFilter {
   label?: string[];
   exclude_label?: string[];
 }
 
-/** A label filter; with `parent`, only that boon's descendants: the whole subtree, not the boon itself. */
+/** A label filter; with `parent`, only that gig's descendants: the whole subtree, not the gig itself. */
 export interface ClaimFilter extends LabelFilter {
   parent?: string;
 }
 
-/** A claim filter; with `human`, only human boons. */
+/** A claim filter; with `human`, only human gigs. */
 export interface ReadyFilter extends ClaimFilter {
   human?: boolean;
 }
 
 export interface ListFilter extends LabelFilter {
-  /** Only human boons. */
+  /** Only human gigs. */
   human?: boolean;
   status?: string[];
   type?: string;
   all?: boolean;
-  /** Direct children of this boon only (unlike ReadyFilter's whole subtree). */
+  /** Direct children of this gig only (unlike ReadyFilter's whole subtree). */
   parent?: string;
   spec?: string;
 }
 
-export class BoonsError extends Error {
+export class GigsError extends Error {
   constructor(
     public code: string,
     message: string,
@@ -165,9 +165,9 @@ export class BoonsError extends Error {
   }
 }
 
-const badRequest = (message: string) => new BoonsError("bad_request", message, 400);
-const notFound = (message: string) => new BoonsError("not_found", message, 404);
-const conflict = (message: string, code = "conflict") => new BoonsError(code, message, 409);
+const badRequest = (message: string) => new GigsError("bad_request", message, 400);
+const notFound = (message: string) => new GigsError("not_found", message, 404);
+const conflict = (message: string, code = "conflict") => new GigsError(code, message, 409);
 
 // Ordered; never edit an applied migration, append a new one.
 const MIGRATIONS = [
@@ -178,7 +178,7 @@ const MIGRATIONS = [
     created_at  TEXT NOT NULL,
     next_number INTEGER NOT NULL DEFAULT 1
   );
-  CREATE TABLE boons (
+  CREATE TABLE gigs (
     id           TEXT PRIMARY KEY,
     project      TEXT NOT NULL REFERENCES projects(prefix),
     number       INTEGER NOT NULL,
@@ -197,30 +197,30 @@ const MIGRATIONS = [
     close_reason TEXT,
     UNIQUE (project, number)
   );
-  CREATE INDEX boons_project_status ON boons (project, status);
+  CREATE INDEX gigs_project_status ON gigs (project, status);
   `,
   `
-  ALTER TABLE boons ADD COLUMN parent TEXT REFERENCES boons(id);
-  CREATE INDEX boons_parent ON boons(parent);
+  ALTER TABLE gigs ADD COLUMN parent TEXT REFERENCES gigs(id);
+  CREATE INDEX gigs_parent ON gigs(parent);
   CREATE TABLE links (
-    boon_id TEXT NOT NULL REFERENCES boons(id),
-    target_id TEXT NOT NULL REFERENCES boons(id),
+    gig_id TEXT NOT NULL REFERENCES gigs(id),
+    target_id TEXT NOT NULL REFERENCES gigs(id),
     kind TEXT NOT NULL CHECK (kind IN ('blocks', 'related', 'discovered-from')),
-    PRIMARY KEY (boon_id, target_id, kind)
+    PRIMARY KEY (gig_id, target_id, kind)
   );
   `,
   // Claims taken before this migration get their expiry in migrate(), using the store's clock and TTL.
   `
-  ALTER TABLE boons ADD COLUMN claim_expires_at TEXT;
-  ALTER TABLE boons ADD COLUMN defer_until TEXT;
+  ALTER TABLE gigs ADD COLUMN claim_expires_at TEXT;
+  ALTER TABLE gigs ADD COLUMN defer_until TEXT;
   CREATE TABLE comments (
     id         INTEGER PRIMARY KEY,
-    boon_id    TEXT NOT NULL REFERENCES boons(id),
+    gig_id    TEXT NOT NULL REFERENCES gigs(id),
     author     TEXT NOT NULL,
     body       TEXT NOT NULL,
     created_at TEXT NOT NULL
   );
-  CREATE INDEX comments_boon ON comments(boon_id);
+  CREATE INDEX comments_gig ON comments(gig_id);
   `,
   `
   CREATE TABLE specs (
@@ -234,8 +234,8 @@ const MIGRATIONS = [
     UNIQUE (project, number)
   );
   ALTER TABLE projects ADD COLUMN next_spec_number INTEGER NOT NULL DEFAULT 1;
-  ALTER TABLE boons ADD COLUMN spec TEXT REFERENCES specs(id);
-  CREATE INDEX boons_spec ON boons(spec);
+  ALTER TABLE gigs ADD COLUMN spec TEXT REFERENCES specs(id);
+  CREATE INDEX gigs_spec ON gigs(spec);
   `,
   `
   ALTER TABLE specs ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
@@ -255,24 +255,24 @@ const MIGRATIONS = [
   `,
   `
   CREATE TABLE labels (
-    boon_id TEXT NOT NULL REFERENCES boons(id),
+    gig_id TEXT NOT NULL REFERENCES gigs(id),
     label   TEXT NOT NULL,
-    PRIMARY KEY (boon_id, label)
+    PRIMARY KEY (gig_id, label)
   );
   CREATE INDEX labels_label ON labels(label);
   `,
   `
-  ALTER TABLE boons ADD COLUMN human INTEGER NOT NULL DEFAULT 0 CHECK (human IN (0, 1));
+  ALTER TABLE gigs ADD COLUMN human INTEGER NOT NULL DEFAULT 0 CHECK (human IN (0, 1));
   `,
 ];
 
 const PROJECT_COLUMNS = "prefix, name, created_at";
-const BOON_COLUMNS =
+const GIG_COLUMNS =
   "id, project, title, description, type, priority, status, claimed_by, claimed_at, claim_expires_at, defer_until, " +
   "created_by, created_at, updated_at, closed_by, closed_at, close_reason, parent, spec, human, " +
-  "(SELECT json_group_array(label) FROM labels WHERE boon_id = boons.id) AS labels";
+  "(SELECT json_group_array(label) FROM labels WHERE gig_id = gigs.id) AS labels";
 const SPEC_COLUMNS = "id, project, title, text, version, created_by, created_at";
-const COMMENT_COLUMNS = "id, boon_id, author, body, created_at";
+const COMMENT_COLUMNS = "id, gig_id, author, body, created_at";
 const CLEAR_CLAIM = "claimed_by = NULL, claimed_at = NULL, claim_expires_at = NULL";
 const READY_ORDER = "ORDER BY priority, created_at, number";
 
@@ -337,9 +337,9 @@ export class Store {
     return this.op(() => this.mustGetProject(prefix));
   }
 
-  // --- boons ---
+  // --- gigs ---
 
-  createBoon(project: string, actor: string, input: NewBoon): Boon {
+  createGig(project: string, actor: string, input: NewGig): Gig {
     return this.op(() => {
       actor = checkActor(actor);
       const p = this.mustGetProject(project);
@@ -364,11 +364,11 @@ export class Store {
       const now = this.timestamp();
       this.db
         .query(
-          `INSERT INTO boons (id, project, number, title, description, type, priority, status, created_by, created_at, updated_at)
+          `INSERT INTO gigs (id, project, number, title, description, type, priority, status, created_by, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)`,
         )
         .run(id, p.prefix, n, title, description, type, priority, actor, now, now);
-      this.db.query("UPDATE boons SET parent = ?, spec = ?, human = ? WHERE id = ?").run(parent, spec, human ? 1 : 0, id);
+      this.db.query("UPDATE gigs SET parent = ?, spec = ?, human = ? WHERE id = ?").run(parent, spec, human ? 1 : 0, id);
       for (const target of blockers) this.insertLink(id, target, "blocks");
       if (discovered) this.insertLink(id, discovered, "discovered-from");
       this.changeLabels(id, labels, []);
@@ -377,25 +377,25 @@ export class Store {
     });
   }
 
-  getBoon(id: string): Boon {
+  getGig(id: string): Gig {
     return this.op(() => this.mustGet(id));
   }
 
-  getDetail(id: string): BoonDetail {
+  getDetail(id: string): GigDetail {
     return this.op(() => {
-      const boon = this.mustGet(id);
+      const gig = this.mustGet(id);
       const graph = this.graph();
       const summaries = (ids: string[]) => [...new Set(ids)]
-        .map((id) => graph.boons.get(id)!)
+        .map((id) => graph.gigs.get(id)!)
         .sort((a, b) => a.project.localeCompare(b.project) || Number(a.id.split("-")[1]) - Number(b.id.split("-")[1]))
         .map(summary);
-      const outgoing = (kind: LinkKind) => graph.links.filter((l) => l.boon_id === boon.id && l.kind === kind).map((l) => l.target_id);
-      const incoming = (kind: LinkKind) => graph.links.filter((l) => l.target_id === boon.id && l.kind === kind).map((l) => l.boon_id);
-      const comments = this.db.query(`SELECT ${COMMENT_COLUMNS} FROM comments WHERE boon_id = ? ORDER BY id`).all(boon.id) as Comment[];
+      const outgoing = (kind: LinkKind) => graph.links.filter((l) => l.gig_id === gig.id && l.kind === kind).map((l) => l.target_id);
+      const incoming = (kind: LinkKind) => graph.links.filter((l) => l.target_id === gig.id && l.kind === kind).map((l) => l.gig_id);
+      const comments = this.db.query(`SELECT ${COMMENT_COLUMNS} FROM comments WHERE gig_id = ? ORDER BY id`).all(gig.id) as Comment[];
       return {
-        boon, ...this.readiness(boon, graph),
-        parent: boon.parent ? summary(graph.boons.get(boon.parent)!) : null,
-        children: summaries([...graph.boons.values()].filter((b) => b.parent === boon.id).map((b) => b.id)),
+        gig, ...this.readiness(gig, graph),
+        parent: gig.parent ? summary(graph.gigs.get(gig.parent)!) : null,
+        children: summaries([...graph.gigs.values()].filter((b) => b.parent === gig.id).map((b) => b.id)),
         blockers: summaries(outgoing("blocks")), blocks: summaries(incoming("blocks")),
         related: summaries([...outgoing("related"), ...incoming("related")]),
         discovered_from: summaries(outgoing("discovered-from")), discovered: summaries(incoming("discovered-from")),
@@ -404,11 +404,11 @@ export class Store {
     });
   }
 
-  /** Changes a boon's fields; status changes go through claim/close/defer instead. */
-  update(id: string, actor: string, changes: BoonChanges): Boon {
+  /** Changes a gig's fields; status changes go through claim/close/defer instead. */
+  update(id: string, actor: string, changes: GigChanges): Gig {
     return this.op(() => {
       actor = checkActor(actor);
-      const boon = this.mustGet(id);
+      const gig = this.mustGet(id);
       if (typeof changes !== "object" || changes === null) throw badRequest("changes must be an object");
       const unknown = Object.keys(changes).filter((k) => !CHANGEABLE.includes(k));
       if (unknown.length) throw badRequest(`cannot update ${unknown.join(", ")}; updatable fields: ${CHANGEABLE.join(", ")}`);
@@ -418,7 +418,7 @@ export class Store {
       if (changes.type !== undefined) sets.type = checkType(changes.type);
       if (changes.priority !== undefined) sets.priority = checkPriority(changes.priority);
       if (changes.parent !== undefined) sets.parent = changes.parent === null ? null : this.reference(changes.parent);
-      if (changes.spec !== undefined) sets.spec = changes.spec === null ? null : this.specReference(changes.spec, boon.project);
+      if (changes.spec !== undefined) sets.spec = changes.spec === null ? null : this.specReference(changes.spec, gig.project);
       if (changes.human !== undefined) sets.human = checkHuman(changes.human) ? 1 : 0;
       const add = changes.add_labels === undefined ? undefined : checkLabels(changes.add_labels, "add_labels");
       const remove = changes.remove_labels === undefined ? undefined : checkLabels(changes.remove_labels, "remove_labels");
@@ -426,41 +426,41 @@ export class Store {
       if (both.length) throw badRequest(`cannot both add and remove label ${both.join(", ")}`);
       const keys = Object.keys(sets);
       if (!keys.length && !add && !remove) throw badRequest(`nothing to update; give at least one of ${CHANGEABLE.join(", ")}`);
-      if (keys.length) this.db.query(`UPDATE boons SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`).run(...Object.values(sets), boon.id);
-      this.changeLabels(boon.id, add ?? [], remove ?? []);
+      if (keys.length) this.db.query(`UPDATE gigs SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`).run(...Object.values(sets), gig.id);
+      this.changeLabels(gig.id, add ?? [], remove ?? []);
       if ("parent" in sets) this.checkCycles();
-      this.touch(boon, actor);
-      return this.mustGet(boon.id);
+      this.touch(gig, actor);
+      return this.mustGet(gig.id);
     });
   }
 
-  /** Exact find/replace on a boon's description (see applyEdits); read, check and write in one transaction. */
-  editBoon(id: string, actor: string, edits: unknown): Boon {
+  /** Exact find/replace on a gig's description (see applyEdits); read, check and write in one transaction. */
+  editGig(id: string, actor: string, edits: unknown): Gig {
     return this.op(() => {
       actor = checkActor(actor);
-      const boon = this.mustGet(id);
-      const description = applyEdits(boon.description, edits);
-      this.db.query("UPDATE boons SET description = ? WHERE id = ?").run(description, boon.id);
-      this.touch(boon, actor);
-      return this.mustGet(boon.id);
+      const gig = this.mustGet(id);
+      const description = applyEdits(gig.description, edits);
+      this.db.query("UPDATE gigs SET description = ? WHERE id = ?").run(description, gig.id);
+      this.touch(gig, actor);
+      return this.mustGet(gig.id);
     });
   }
 
   addComment(id: string, actor: string, body: unknown): Comment {
     return this.op(() => {
       actor = checkActor(actor);
-      const boon = this.mustGet(id);
+      const gig = this.mustGet(id);
       if (typeof body !== "string" || !body.trim()) throw badRequest("comment body is required");
       const comment = this.db
-        .query(`INSERT INTO comments (boon_id, author, body, created_at) VALUES (?, ?, ?, ?) RETURNING ${COMMENT_COLUMNS}`)
-        .get(boon.id, actor, body.trim(), this.timestamp()) as Comment;
-      this.touch(boon, actor);
+        .query(`INSERT INTO comments (gig_id, author, body, created_at) VALUES (?, ?, ?, ?) RETURNING ${COMMENT_COLUMNS}`)
+        .get(gig.id, actor, body.trim(), this.timestamp()) as Comment;
+      this.touch(gig, actor);
       return comment;
     });
   }
 
-  /** Boons of a project. Default: unfinished only; `all` includes closed; `status` overrides both. */
-  listBoons(project: string, filter: ListFilter = {}): Boon[] {
+  /** Gigs of a project. Default: unfinished only; `all` includes closed; `status` overrides both. */
+  listGigs(project: string, filter: ListFilter = {}): Gig[] {
     return this.op(() => {
       const p = this.mustGetProject(project);
       const where = ["project = ?"];
@@ -488,51 +488,51 @@ export class Store {
         params.push(this.specReference(filter.spec, p.prefix));
       }
       humanFilterClauses(filter, where, params);
-      return this.boons(`SELECT ${BOON_COLUMNS} FROM boons WHERE ${where.join(" AND ")} ORDER BY priority, number`, ...params);
+      return this.gigs(`SELECT ${GIG_COLUMNS} FROM gigs WHERE ${where.join(" AND ")} ORDER BY priority, number`, ...params);
     });
   }
 
-  /** Ready boons of a project (only those pointing to `spec` and matching `filter`, if given), in the order they should be picked up. */
-  ready(project: string, spec?: unknown, filter: ReadyFilter = {}): Boon[] {
-    return this.op(() => this.readyBoons(this.mustGetProject(project).prefix, spec, filter));
+  /** Ready gigs of a project (only those pointing to `spec` and matching `filter`, if given), in the order they should be picked up. */
+  ready(project: string, spec?: unknown, filter: ReadyFilter = {}): Gig[] {
+    return this.op(() => this.readyGigs(this.mustGetProject(project).prefix, spec, filter));
   }
 
-  blocked(project: string, spec?: unknown): { boon: Boon; reasons: Reason[] }[] {
+  blocked(project: string, spec?: unknown): { gig: Gig; reasons: Reason[] }[] {
     return this.op(() => {
       const prefix = this.mustGetProject(project).prefix;
       const graph = this.graph();
-      return this.orderedBoons(prefix, spec).filter((b) => b.status !== "closed" && b.status !== "deferred")
-        .map((boon) => ({ boon, reasons: this.readiness(boon, graph).reasons }))
+      return this.orderedGigs(prefix, spec).filter((b) => b.status !== "closed" && b.status !== "deferred")
+        .map((gig) => ({ gig, reasons: this.readiness(gig, graph).reasons }))
         .filter((entry) => entry.reasons.some((r) => r.kind !== "deferred_ancestor"));
     });
   }
 
-  addLink(id: string, target: unknown, kind: unknown, actor: string): BoonDetail {
+  addLink(id: string, target: unknown, kind: unknown, actor: string): GigDetail {
     return this.op(() => {
       actor = checkActor(actor);
-      const boon = this.mustGet(id);
+      const gig = this.mustGet(id);
       const targetId = this.reference(target);
       const linkKind = checkLinkKind(kind);
-      this.insertLink(boon.id, targetId, linkKind);
+      this.insertLink(gig.id, targetId, linkKind);
       if (linkKind === "blocks") this.checkCycles();
-      this.touch(boon, actor);
-      return this.getDetail(boon.id);
+      this.touch(gig, actor);
+      return this.getDetail(gig.id);
     });
   }
 
-  removeLink(id: string, target: unknown, kind: unknown, actor: string): BoonDetail {
+  removeLink(id: string, target: unknown, kind: unknown, actor: string): GigDetail {
     return this.op(() => {
       actor = checkActor(actor);
-      const boon = this.mustGet(id);
+      const gig = this.mustGet(id);
       const targetId = this.reference(target);
       const linkKind = checkLinkKind(kind);
-      if (boon.id === targetId) throw badRequest("a boon cannot link to itself");
-      this.db.query("DELETE FROM links WHERE boon_id = ? AND target_id = ? AND kind = ?").run(boon.id, targetId, linkKind);
+      if (gig.id === targetId) throw badRequest("a gig cannot link to itself");
+      this.db.query("DELETE FROM links WHERE gig_id = ? AND target_id = ? AND kind = ?").run(gig.id, targetId, linkKind);
       if (linkKind === "related") {
-        this.db.query("DELETE FROM links WHERE boon_id = ? AND target_id = ? AND kind = ?").run(targetId, boon.id, linkKind);
+        this.db.query("DELETE FROM links WHERE gig_id = ? AND target_id = ? AND kind = ?").run(targetId, gig.id, linkKind);
       }
-      this.touch(boon, actor);
-      return this.getDetail(boon.id);
+      this.touch(gig, actor);
+      return this.getDetail(gig.id);
     });
   }
 
@@ -627,105 +627,105 @@ export class Store {
 
   // --- claims ---
 
-  claim(id: string, actor: string): Boon {
+  claim(id: string, actor: string): Gig {
     return this.op(() => {
       actor = checkActor(actor);
-      const boon = this.mustGet(id);
-      if (boon.status === "in_progress") {
-        if (boon.claimed_by === actor) return this.renew(boon.id);
-        throw claimedBy(boon);
+      const gig = this.mustGet(id);
+      if (gig.status === "in_progress") {
+        if (gig.claimed_by === actor) return this.renew(gig.id);
+        throw claimedBy(gig);
       }
-      if (boon.status !== "open") throw conflict(`${boon.id} is ${boon.status} and cannot be claimed`, "not_claimable");
-      const { ready, reasons } = this.readiness(boon);
-      if (!ready) throw new BoonsError("not_ready", `${boon.id} is not ready: ${formatReasons(reasons)}`, 409, reasons);
-      return this.claimBoon(boon.id, actor);
+      if (gig.status !== "open") throw conflict(`${gig.id} is ${gig.status} and cannot be claimed`, "not_claimable");
+      const { ready, reasons } = this.readiness(gig);
+      if (!ready) throw new GigsError("not_ready", `${gig.id} is not ready: ${formatReasons(reasons)}`, 409, reasons);
+      return this.claimGig(gig.id, actor);
     });
   }
 
   /**
-   * Claims the first ready boon of the project (within `spec` and matching `filter`, if given, in `ready` order)
-   * that is not a human boon, or returns null if there is none. Human boons are skipped whatever the filter.
+   * Claims the first ready gig of the project (within `spec` and matching `filter`, if given, in `ready` order)
+   * that is not a human gig, or returns null if there is none. Human gigs are skipped whatever the filter.
    */
-  claimNext(project: string, actor: string, spec?: unknown, filter: ClaimFilter = {}): Boon | null {
+  claimNext(project: string, actor: string, spec?: unknown, filter: ClaimFilter = {}): Gig | null {
     return this.op(() => {
       actor = checkActor(actor);
       const { label, exclude_label, parent } = filter;
-      const next = this.readyBoons(this.mustGetProject(project).prefix, spec, { label, exclude_label, parent }).find((boon) => !boon.human);
-      return next ? this.claimBoon(next.id, actor) : null;
+      const next = this.readyGigs(this.mustGetProject(project).prefix, spec, { label, exclude_label, parent }).find((gig) => !gig.human);
+      return next ? this.claimGig(next.id, actor) : null;
     });
   }
 
   /** Renews the claim; only its holder may do so. */
-  heartbeat(id: string, actor: string): Boon {
+  heartbeat(id: string, actor: string): Gig {
     return this.op(() => {
       actor = checkActor(actor);
-      const boon = this.mustGet(id);
-      if (boon.status !== "in_progress") throw conflict(`${boon.id} is not claimed (status ${boon.status})`);
-      if (boon.claimed_by !== actor) {
-        throw conflict(`${boon.id} is claimed by ${boon.claimed_by}, not ${actor}; only the holder can heartbeat`, "claimed");
+      const gig = this.mustGet(id);
+      if (gig.status !== "in_progress") throw conflict(`${gig.id} is not claimed (status ${gig.status})`);
+      if (gig.claimed_by !== actor) {
+        throw conflict(`${gig.id} is claimed by ${gig.claimed_by}, not ${actor}; only the holder can heartbeat`, "claimed");
       }
-      return this.renew(boon.id);
+      return this.renew(gig.id);
     });
   }
 
-  unclaim(id: string, actor: string): Boon {
+  unclaim(id: string, actor: string): Gig {
     return this.op(() => {
       actor = checkActor(actor);
-      const boon = this.mustGet(id);
-      if (boon.status !== "in_progress") throw conflict(`${boon.id} is not claimed`);
+      const gig = this.mustGet(id);
+      if (gig.status !== "in_progress") throw conflict(`${gig.id} is not claimed`);
       this.db
-        .query(`UPDATE boons SET status = 'open', ${CLEAR_CLAIM}, updated_at = ? WHERE id = ?`)
-        .run(this.timestamp(), boon.id);
-      return this.mustGet(boon.id);
+        .query(`UPDATE gigs SET status = 'open', ${CLEAR_CLAIM}, updated_at = ? WHERE id = ?`)
+        .run(this.timestamp(), gig.id);
+      return this.mustGet(gig.id);
     });
   }
 
   // --- close / reopen ---
 
-  close(id: string, actor: string, reason?: unknown, force: unknown = false): Boon {
+  close(id: string, actor: string, reason?: unknown, force: unknown = false): Gig {
     return this.op(() => {
       actor = checkActor(actor);
       if (reason !== undefined && reason !== null && typeof reason !== "string") {
         throw badRequest("reason must be a string");
       }
-      const boon = this.mustGet(id);
-      if (boon.status === "closed") throw conflict(`${boon.id} is already closed`);
+      const gig = this.mustGet(id);
+      if (gig.status === "closed") throw conflict(`${gig.id} is already closed`);
       if (typeof force !== "boolean") throw badRequest("force must be a boolean");
-      const children = this.db.query("SELECT id FROM boons WHERE parent = ? AND status != 'closed'").all(boon.id) as { id: string }[];
-      if (!force && children.length) throw conflict(`${boon.id} has unfinished children: ${children.map((c) => c.id).join(", ")}`, "has_open_children");
+      const children = this.db.query("SELECT id FROM gigs WHERE parent = ? AND status != 'closed'").all(gig.id) as { id: string }[];
+      if (!force && children.length) throw conflict(`${gig.id} has unfinished children: ${children.map((c) => c.id).join(", ")}`, "has_open_children");
       const now = this.timestamp();
       this.db
         .query(
-          `UPDATE boons SET status = 'closed', ${CLEAR_CLAIM}, defer_until = NULL,
+          `UPDATE gigs SET status = 'closed', ${CLEAR_CLAIM}, defer_until = NULL,
              closed_by = ?, closed_at = ?, close_reason = ?, updated_at = ? WHERE id = ?`,
         )
-        .run(actor, now, reason?.trim() || null, now, boon.id);
-      return this.mustGet(boon.id);
+        .run(actor, now, reason?.trim() || null, now, gig.id);
+      return this.mustGet(gig.id);
     });
   }
 
-  reopen(id: string): Boon {
+  reopen(id: string): Gig {
     return this.op(() => {
-      const boon = this.mustGet(id);
-      if (boon.status !== "closed") throw conflict(`${boon.id} is not closed`);
+      const gig = this.mustGet(id);
+      if (gig.status !== "closed") throw conflict(`${gig.id} is not closed`);
       this.db
         .query(
-          `UPDATE boons SET status = 'open', closed_by = NULL, closed_at = NULL, close_reason = NULL,
+          `UPDATE gigs SET status = 'open', closed_by = NULL, closed_at = NULL, close_reason = NULL,
              updated_at = ? WHERE id = ?`,
         )
-        .run(this.timestamp(), boon.id);
-      return this.mustGet(boon.id);
+        .run(this.timestamp(), gig.id);
+      return this.mustGet(gig.id);
     });
   }
 
   // --- defer ---
 
-  /** Sets an open or in-progress boon aside, optionally until a future time; clears any claim. */
-  defer(id: string, actor: string, until?: unknown): Boon {
+  /** Sets an open or in-progress gig aside, optionally until a future time; clears any claim. */
+  defer(id: string, actor: string, until?: unknown): Gig {
     return this.op(() => {
       actor = checkActor(actor);
-      const boon = this.mustGet(id);
-      if (boon.status === "closed") throw conflict(`${boon.id} is closed and cannot be deferred`);
+      const gig = this.mustGet(id);
+      if (gig.status === "closed") throw conflict(`${gig.id} is closed and cannot be deferred`);
       let deferUntil: string | null = null;
       if (until !== undefined && until !== null) {
         const date = isoTime(until);
@@ -734,19 +734,19 @@ export class Store {
         deferUntil = date.toISOString();
       }
       this.db
-        .query(`UPDATE boons SET status = 'deferred', ${CLEAR_CLAIM}, defer_until = ?, updated_at = ? WHERE id = ?`)
-        .run(deferUntil, this.timestamp(), boon.id);
-      return this.mustGet(boon.id);
+        .query(`UPDATE gigs SET status = 'deferred', ${CLEAR_CLAIM}, defer_until = ?, updated_at = ? WHERE id = ?`)
+        .run(deferUntil, this.timestamp(), gig.id);
+      return this.mustGet(gig.id);
     });
   }
 
-  undefer(id: string, actor: string): Boon {
+  undefer(id: string, actor: string): Gig {
     return this.op(() => {
       actor = checkActor(actor);
-      const boon = this.mustGet(id);
-      if (boon.status !== "deferred") throw conflict(`${boon.id} is not deferred`);
-      this.db.query("UPDATE boons SET status = 'open', defer_until = NULL, updated_at = ? WHERE id = ?").run(this.timestamp(), boon.id);
-      return this.mustGet(boon.id);
+      const gig = this.mustGet(id);
+      if (gig.status !== "deferred") throw conflict(`${gig.id} is not deferred`);
+      this.db.query("UPDATE gigs SET status = 'open', defer_until = NULL, updated_at = ? WHERE id = ?").run(this.timestamp(), gig.id);
+      return this.mustGet(gig.id);
     });
   }
 
@@ -764,11 +764,11 @@ export class Store {
   private applyTimeTransitions() {
     const now = this.timestamp();
     this.db
-      .query(`UPDATE boons SET status = 'open', ${CLEAR_CLAIM}, updated_at = claim_expires_at
+      .query(`UPDATE gigs SET status = 'open', ${CLEAR_CLAIM}, updated_at = claim_expires_at
               WHERE status = 'in_progress' AND claim_expires_at <= ?`)
       .run(now);
     this.db
-      .query(`UPDATE boons SET status = 'open', defer_until = NULL, updated_at = defer_until
+      .query(`UPDATE gigs SET status = 'open', defer_until = NULL, updated_at = defer_until
               WHERE status = 'deferred' AND defer_until <= ?`)
       .run(now);
   }
@@ -776,13 +776,13 @@ export class Store {
   private migrate() {
     const { user_version } = this.db.query("PRAGMA user_version").get() as { user_version: number };
     if (user_version > MIGRATIONS.length) {
-      throw new Error(`database schema version ${user_version} is newer than this boons (${MIGRATIONS.length})`);
+      throw new Error(`database schema version ${user_version} is newer than this gigs (${MIGRATIONS.length})`);
     }
     if (user_version === MIGRATIONS.length) return;
     for (const sql of MIGRATIONS.slice(user_version)) this.db.run(sql);
     this.db.run(`PRAGMA user_version = ${MIGRATIONS.length}`);
     // Claims from before claim expiry existed get a full TTL from now rather than lapsing at once.
-    this.db.query("UPDATE boons SET claim_expires_at = ? WHERE status = 'in_progress' AND claim_expires_at IS NULL").run(this.expiry());
+    this.db.query("UPDATE gigs SET claim_expires_at = ? WHERE status = 'in_progress' AND claim_expires_at IS NULL").run(this.expiry());
   }
 
   private timestamp() {
@@ -793,15 +793,15 @@ export class Store {
     return new Date(this.now().getTime() + this.ttlMs).toISOString();
   }
 
-  private renew(id: string): Boon {
-    this.db.query("UPDATE boons SET claim_expires_at = ? WHERE id = ?").run(this.expiry(), id);
+  private renew(id: string): Gig {
+    this.db.query("UPDATE gigs SET claim_expires_at = ? WHERE id = ?").run(this.expiry(), id);
     return this.mustGet(id);
   }
 
-  /** Records a change to the boon; activity by the claim holder renews the claim. */
-  private touch(boon: Boon, actor: string) {
-    this.db.query("UPDATE boons SET updated_at = ? WHERE id = ?").run(this.timestamp(), boon.id);
-    if (boon.status === "in_progress" && boon.claimed_by === actor) this.renew(boon.id);
+  /** Records a change to the gig; activity by the claim holder renews the claim. */
+  private touch(gig: Gig, actor: string) {
+    this.db.query("UPDATE gigs SET updated_at = ? WHERE id = ?").run(this.timestamp(), gig.id);
+    if (gig.status === "in_progress" && gig.claimed_by === actor) this.renew(gig.id);
   }
 
   private findProject(prefix: string): Project | null {
@@ -816,22 +816,22 @@ export class Store {
     return p;
   }
 
-  private mustGet(id: string): Boon {
-    const [boon] = this.boons(`SELECT ${BOON_COLUMNS} FROM boons WHERE id = ?`, id.trim().toLowerCase());
-    if (!boon) throw notFound(`boon ${id} not found`);
-    return boon;
+  private mustGet(id: string): Gig {
+    const [gig] = this.gigs(`SELECT ${GIG_COLUMNS} FROM gigs WHERE id = ?`, id.trim().toLowerCase());
+    if (!gig) throw notFound(`gig ${id} not found`);
+    return gig;
   }
 
-  /** Runs a query selecting BOON_COLUMNS, decoding each boon's labels and human flag. */
-  private boons(sql: string, ...params: (string | number)[]): Boon[] {
-    const rows = this.db.query(sql).all(...params) as (Omit<Boon, "labels" | "human"> & { labels: string; human: number })[];
+  /** Runs a query selecting GIG_COLUMNS, decoding each gig's labels and human flag. */
+  private gigs(sql: string, ...params: (string | number)[]): Gig[] {
+    const rows = this.db.query(sql).all(...params) as (Omit<Gig, "labels" | "human"> & { labels: string; human: number })[];
     return rows.map((row) => ({ ...row, human: row.human === 1, labels: (JSON.parse(row.labels) as string[]).sort() }));
   }
 
   /** Adding a present label or removing a missing one is a no-op. */
   private changeLabels(id: string, add: string[], remove: string[]) {
-    for (const label of add) this.db.query("INSERT OR IGNORE INTO labels (boon_id, label) VALUES (?, ?)").run(id, label);
-    for (const label of remove) this.db.query("DELETE FROM labels WHERE boon_id = ? AND label = ?").run(id, label);
+    for (const label of add) this.db.query("INSERT OR IGNORE INTO labels (gig_id, label) VALUES (?, ?)").run(id, label);
+    for (const label of remove) this.db.query("DELETE FROM labels WHERE gig_id = ? AND label = ?").run(id, label);
   }
 
   private reference(id: unknown): string {
@@ -845,7 +845,7 @@ export class Store {
     return spec;
   }
 
-  /** A boon may only point to a spec of its own project. */
+  /** A gig may only point to a spec of its own project. */
   private specReference(id: unknown, project: string): string {
     if (typeof id !== "string" || !id.trim()) throw badRequest("spec must be a non-empty string");
     const spec = this.mustGetSpec(id);
@@ -854,40 +854,40 @@ export class Store {
   }
 
   private insertLink(id: string, target: string, kind: LinkKind) {
-    if (id === target) throw badRequest("a boon cannot link to itself");
-    if (kind === "related" && this.db.query("SELECT 1 FROM links WHERE boon_id = ? AND target_id = ? AND kind = 'related'").get(target, id)) return;
-    this.db.query("INSERT OR IGNORE INTO links (boon_id, target_id, kind) VALUES (?, ?, ?)").run(id, target, kind);
+    if (id === target) throw badRequest("a gig cannot link to itself");
+    if (kind === "related" && this.db.query("SELECT 1 FROM links WHERE gig_id = ? AND target_id = ? AND kind = 'related'").get(target, id)) return;
+    this.db.query("INSERT OR IGNORE INTO links (gig_id, target_id, kind) VALUES (?, ?, ?)").run(id, target, kind);
   }
 
   private graph(): Graph {
-    const boons = this.boons(`SELECT ${BOON_COLUMNS} FROM boons ORDER BY id`);
-    return { boons: new Map(boons.map((b) => [b.id, b])), links: this.db.query("SELECT * FROM links ORDER BY boon_id, target_id, kind").all() as Link[] };
+    const gigs = this.gigs(`SELECT ${GIG_COLUMNS} FROM gigs ORDER BY id`);
+    return { gigs: new Map(gigs.map((b) => [b.id, b])), links: this.db.query("SELECT * FROM links ORDER BY gig_id, target_id, kind").all() as Link[] };
   }
 
-  private ancestors(boon: Boon, graph: Graph): Boon[] {
-    const result: Boon[] = [];
-    const seen = new Set([boon.id]);
-    let parent = boon.parent;
+  private ancestors(gig: Gig, graph: Graph): Gig[] {
+    const result: Gig[] = [];
+    const seen = new Set([gig.id]);
+    let parent = gig.parent;
     while (parent) {
-      if (seen.has(parent)) throw conflict(`parent cycle: ${[boon.id, ...result.map((b) => b.id), parent].join(" -> ")}`, "cycle");
+      if (seen.has(parent)) throw conflict(`parent cycle: ${[gig.id, ...result.map((b) => b.id), parent].join(" -> ")}`, "cycle");
       seen.add(parent);
-      const ancestor = graph.boons.get(parent)!;
+      const ancestor = graph.gigs.get(parent)!;
       result.push(ancestor);
       parent = ancestor.parent;
     }
     return result;
   }
 
-  /** Structural checks include closed boons, since they can be reopened. */
+  /** Structural checks include closed gigs, since they can be reopened. */
   private checkCycles() {
     const graph = this.graph();
-    const edges = new Map<string, Set<string>>([...graph.boons.keys()].map((id) => [id, new Set<string>()]));
-    const blockers = (id: string) => graph.links.filter((l) => l.boon_id === id && l.kind === "blocks");
-    for (const boon of graph.boons.values()) {
-      if (boon.parent) edges.get(boon.parent)!.add(boon.id);
-      for (const link of blockers(boon.id)) edges.get(boon.id)!.add(link.target_id);
-      for (const ancestor of this.ancestors(boon, graph)) {
-        for (const link of blockers(ancestor.id)) edges.get(boon.id)!.add(link.target_id);
+    const edges = new Map<string, Set<string>>([...graph.gigs.keys()].map((id) => [id, new Set<string>()]));
+    const blockers = (id: string) => graph.links.filter((l) => l.gig_id === id && l.kind === "blocks");
+    for (const gig of graph.gigs.values()) {
+      if (gig.parent) edges.get(gig.parent)!.add(gig.id);
+      for (const link of blockers(gig.id)) edges.get(gig.id)!.add(link.target_id);
+      for (const ancestor of this.ancestors(gig, graph)) {
+        for (const link of blockers(ancestor.id)) edges.get(gig.id)!.add(link.target_id);
       }
     }
     const done = new Set<string>();
@@ -903,27 +903,27 @@ export class Store {
       active.delete(id);
       done.add(id);
     };
-    for (const id of graph.boons.keys()) visit(id);
+    for (const id of graph.gigs.keys()) visit(id);
   }
 
-  private readiness(boon: Boon, graph = this.graph()): { ready: boolean; reasons: Reason[] } {
+  private readiness(gig: Gig, graph = this.graph()): { ready: boolean; reasons: Reason[] } {
     const reasons: Reason[] = [];
-    if (boon.status !== "closed") {
-      const blockers = (id: string) => graph.links.filter((l) => l.boon_id === id && l.kind === "blocks" && graph.boons.get(l.target_id)!.status !== "closed");
-      for (const link of blockers(boon.id)) reasons.push({ kind: "blocker", id: link.target_id });
-      for (const child of graph.boons.values()) {
-        if (child.parent === boon.id && child.status !== "closed") reasons.push({ kind: "child", id: child.id });
+    if (gig.status !== "closed") {
+      const blockers = (id: string) => graph.links.filter((l) => l.gig_id === id && l.kind === "blocks" && graph.gigs.get(l.target_id)!.status !== "closed");
+      for (const link of blockers(gig.id)) reasons.push({ kind: "blocker", id: link.target_id });
+      for (const child of graph.gigs.values()) {
+        if (child.parent === gig.id && child.status !== "closed") reasons.push({ kind: "child", id: child.id });
       }
-      for (const ancestor of this.ancestors(boon, graph)) {
+      for (const ancestor of this.ancestors(gig, graph)) {
         for (const link of blockers(ancestor.id)) reasons.push({ kind: "inherited", id: link.target_id, via: ancestor.id });
         if (ancestor.status === "deferred") reasons.push({ kind: "deferred_ancestor", id: ancestor.id });
       }
     }
-    return { ready: boon.status === "open" && reasons.length === 0, reasons };
+    return { ready: gig.status === "open" && reasons.length === 0, reasons };
   }
 
-  /** Boons of the project in pickup order; with `spec`, only those pointing to it; with `filter`, only those matching. */
-  private orderedBoons(prefix: string, spec?: unknown, filter: ReadyFilter = {}): Boon[] {
+  /** Gigs of the project in pickup order; with `spec`, only those pointing to it; with `filter`, only those matching. */
+  private orderedGigs(prefix: string, spec?: unknown, filter: ReadyFilter = {}): Gig[] {
     const where = ["project = ?"];
     const params: (string | number)[] = [prefix];
     if (spec !== undefined) {
@@ -932,24 +932,24 @@ export class Store {
     }
     if (filter.parent !== undefined) {
       // Every descendant (children, grandchildren, ...), not the parent itself; parent cycles are rejected on write.
-      where.push(`id IN (WITH RECURSIVE subtree(id) AS (SELECT id FROM boons WHERE parent = ?
-        UNION SELECT boons.id FROM boons JOIN subtree ON boons.parent = subtree.id) SELECT id FROM subtree)`);
+      where.push(`id IN (WITH RECURSIVE subtree(id) AS (SELECT id FROM gigs WHERE parent = ?
+        UNION SELECT gigs.id FROM gigs JOIN subtree ON gigs.parent = subtree.id) SELECT id FROM subtree)`);
       params.push(this.reference(filter.parent));
     }
     humanFilterClauses(filter, where, params);
-    return this.boons(`SELECT ${BOON_COLUMNS} FROM boons WHERE ${where.join(" AND ")} ${READY_ORDER}`, ...params);
+    return this.gigs(`SELECT ${GIG_COLUMNS} FROM gigs WHERE ${where.join(" AND ")} ${READY_ORDER}`, ...params);
   }
 
   /** Readiness is always derived from the whole graph, so a blocker outside the spec or filter still blocks. */
-  private readyBoons(prefix: string, spec?: unknown, filter?: ReadyFilter): Boon[] {
+  private readyGigs(prefix: string, spec?: unknown, filter?: ReadyFilter): Gig[] {
     const graph = this.graph();
-    return this.orderedBoons(prefix, spec, filter).filter((boon) => this.readiness(boon, graph).ready);
+    return this.orderedGigs(prefix, spec, filter).filter((gig) => this.readiness(gig, graph).ready);
   }
 
-  private claimBoon(id: string, actor: string): Boon {
+  private claimGig(id: string, actor: string): Gig {
     const now = this.timestamp();
     this.db
-      .query("UPDATE boons SET status = 'in_progress', claimed_by = ?, claimed_at = ?, claim_expires_at = ?, updated_at = ? WHERE id = ?")
+      .query("UPDATE gigs SET status = 'in_progress', claimed_by = ?, claimed_at = ?, claim_expires_at = ?, updated_at = ? WHERE id = ?")
       .run(actor, now, this.expiry(), now, id);
     return this.mustGet(id);
   }
@@ -982,11 +982,11 @@ export function formatReasons(reasons: Reason[]): string {
   }).join("; ");
 }
 
-function claimedBy(boon: Boon) {
-  return conflict(`${boon.id} is already claimed by ${boon.claimed_by} (until ${boon.claim_expires_at})`, "claimed");
+function claimedBy(gig: Gig) {
+  return conflict(`${gig.id} is already claimed by ${gig.claimed_by} (until ${gig.claim_expires_at})`, "claimed");
 }
 
-function summary({ id, title, status, type, priority }: Boon): BoonSummary {
+function summary({ id, title, status, type, priority }: Gig): GigSummary {
   return { id, title, status, type, priority };
 }
 
@@ -1006,9 +1006,9 @@ function checkLabels(v: unknown, field: string): string[] {
   return [...new Set(v as string[])];
 }
 
-/** Appends SQL conditions for a label filter on `boons`. */
+/** Appends SQL conditions for a label filter on `gigs`. */
 function labelClauses(filter: LabelFilter, where: string[], params: (string | number)[]) {
-  const has = "SELECT 1 FROM labels WHERE labels.boon_id = boons.id AND labels.label";
+  const has = "SELECT 1 FROM labels WHERE labels.gig_id = gigs.id AND labels.label";
   for (const label of checkLabels(filter.label ?? [], "label")) {
     where.push(`EXISTS (${has} = ?)`);
     params.push(label);
@@ -1020,7 +1020,7 @@ function labelClauses(filter: LabelFilter, where: string[], params: (string | nu
   }
 }
 
-/** Appends SQL conditions for labels and, with `human`, only human boons. */
+/** Appends SQL conditions for labels and, with `human`, only human gigs. */
 function humanFilterClauses(filter: LabelFilter & { human?: unknown }, where: string[], params: (string | number)[]) {
   labelClauses(filter, where, params);
   if (filter.human !== undefined && typeof filter.human !== "boolean") throw badRequest("human must be a boolean");
@@ -1079,7 +1079,7 @@ function checkDescription(v: unknown): string {
   return v;
 }
 
-function checkType(v: unknown): BoonType {
+function checkType(v: unknown): GigType {
   if (!isType(v)) throw badRequest(`type must be one of ${TYPES.join(", ")}`);
   return v;
 }
@@ -1089,8 +1089,8 @@ function checkPriority(v: unknown): number {
   return v;
 }
 
-function isType(v: unknown): v is BoonType {
-  return TYPES.includes(v as BoonType);
+function isType(v: unknown): v is GigType {
+  return TYPES.includes(v as GigType);
 }
 
 function isStatus(v: unknown): v is Status {

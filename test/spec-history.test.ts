@@ -3,23 +3,23 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BoonsError, Store } from "../src/store";
+import { GigsError, Store } from "../src/store";
 
 let dir: string;
 let path: string;
 let store: Store;
 const at = "2026-01-01T00:00:00.000Z";
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "boons-spec-history-"));
+  dir = mkdtempSync(join(tmpdir(), "gigs-spec-history-"));
   path = join(dir, "test.db");
   store = new Store({ path, now: () => new Date(at) });
-  store.createProject("bn");
+  store.createProject("gig");
 });
 afterEach(() => { store.dispose(); rmSync(dir, { recursive: true, force: true }); });
-const create = (text = "one two") => store.createSpec("bn", "alice", { title: "Agreement", text });
+const create = (text = "one two") => store.createSpec("gig", "alice", { title: "Agreement", text });
 function error(fn: () => unknown, code: string, status: number, message?: string) {
   try { fn(); } catch (err) {
-    expect(err).toBeInstanceOf(BoonsError);
+    expect(err).toBeInstanceOf(GigsError);
     expect(err).toMatchObject({ code, status, ...(message ? { message } : {}) });
     return;
   }
@@ -34,7 +34,7 @@ test("numbered snapshots and compact ascending history for each kind of change",
   const edits = [{ old: "one", new: "first" }, { old: "first three", new: "final" }];
   expect(store.editSpec(first.id, "carol", edits)).toMatchObject({ version: 4, text: "final" });
   expect(store.updateSpec(first.id, "bob", { title: "Last", text: "done" }).version).toBe(5);
-  expect(store.getSpec(" BN-S1 ", 1)).toEqual(first);
+  expect(store.getSpec(" GIG-S1 ", 1)).toEqual(first);
   expect(store.getSpec(first.id, 2)).toEqual({ ...first, version: 2, title: "Renamed" });
   expect(store.getSpec(first.id, 3)).toEqual({ ...first, version: 3, title: "Renamed", text: "one three" });
   expect(store.getSpec(first.id, 4)).toEqual({ ...first, version: 4, title: "Renamed", text: "final" });
@@ -45,11 +45,11 @@ test("numbered snapshots and compact ascending history for each kind of change",
     { version: 4, by: "carol", at, kind: "edit", edits },
     { version: 5, by: "bob", at, kind: "update", title: "Last", text: "replaced" },
   ]);
-  expect(store.listSpecs("bn")[0]?.version).toBe(5);
+  expect(store.listSpecs("gig")[0]?.version).toBe(5);
   error(() => store.getSpec(first.id, 6), "not_found", 404);
   for (const version of [0, -1, 1.5, "1", NaN, Infinity]) error(() => store.getSpec(first.id, version), "bad_request", 400);
-  error(() => store.specHistory("bn-s99"), "not_found", 404);
-  error(() => store.editSpec("bn-s99", "a", []), "not_found", 404);
+  error(() => store.specHistory("gig-s99"), "not_found", 404);
+  error(() => store.editSpec("gig-s99", "a", []), "not_found", 404);
   store.dispose();
   store = new Store({ path });
   expect(store.getSpec(first.id, 1)).toEqual(first);
@@ -104,29 +104,29 @@ test("snapshot insertion failures roll back create, update and edit", () => {
     expect(() => store.updateSpec(s.id, "a", { title: "changed" })).toThrow("no history");
     expect(() => store.editSpec(s.id, "a", [{ old: "one", new: "changed" }])).toThrow("no history");
     expect(store.getSpec(s.id)).toEqual(s);
-    expect(store.listSpecs("bn")).toHaveLength(1);
+    expect(store.listSpecs("gig")).toHaveLength(1);
     expect(store.specHistory(s.id)).toHaveLength(1);
     db.run("DROP TRIGGER reject_version");
-    expect(create().id).toBe("bn-s2");
+    expect(create().id).toBe("gig-s2");
   } finally { db.close(); }
 });
 
 test("migration 5 backfills the current v4 state at version 1 using its creator and creation time", () => {
   const first = create();
   store.updateSpec(first.id, "bob", { title: "Current", text: "Current text" });
-  store.createBoon("bn", "a", { title: "linked", spec: first.id });
+  store.createGig("gig", "a", { title: "linked", spec: first.id });
   store.dispose();
   const db = new Database(path);
-  db.run("ALTER TABLE boons DROP COLUMN human; DROP TABLE labels; DROP TABLE spec_versions; ALTER TABLE specs DROP COLUMN version; PRAGMA user_version = 4;");
+  db.run("ALTER TABLE gigs DROP COLUMN human; DROP TABLE labels; DROP TABLE spec_versions; ALTER TABLE specs DROP COLUMN version; PRAGMA user_version = 4;");
   db.close();
   store = new Store({ path });
   expect(store.getSpec(first.id)).toEqual({ ...first, title: "Current", text: "Current text" });
   expect(store.getSpec(first.id, 1)).toEqual(store.getSpec(first.id));
   expect(store.specHistory(first.id)).toEqual([{ version: 1, by: "alice", at, kind: "create" }]);
-  expect(store.getBoon("bn-1").spec).toBe(first.id);
+  expect(store.getGig("gig-1").spec).toBe(first.id);
   expect(store.updateSpec(first.id, "carol", { title: "Next" }).version).toBe(2);
   store.dispose();
   store = new Store({ path });
   expect(store.specHistory(first.id)).toHaveLength(2);
-  expect(create().id).toBe("bn-s2");
+  expect(create().id).toBe("gig-s2");
 });
