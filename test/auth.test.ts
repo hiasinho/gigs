@@ -1,10 +1,11 @@
-import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { configFromEnv, createHandler } from "../src/server";
 import { Store } from "../src/store";
 import { bunDescribe, bunTest, openSql, openStore } from "./harness";
+import { openApi } from "./http";
 
 const dir = mkdtempSync(join(tmpdir(), "gigs-auth-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -55,6 +56,7 @@ describe("store tokens", () => {
   });
 });
 
+// Bun-only: the Worker always has auth on.
 bunDescribe("auth off (no admin token)", () => {
   const store = openStore(join(dir, "off.db"));
   const handle = createHandler(store);
@@ -68,19 +70,27 @@ bunDescribe("auth off (no admin token)", () => {
   });
 });
 
-bunDescribe("auth on (admin token)", () => {
-  const store = openStore(join(dir, "on.db"));
-  const handle = createHandler(store, { adminToken: "adm1n" });
-  store.createProject("ab");
-  store.createProject("cd");
-  const ab = store.createToken("ab").token;
-  const cd = store.createToken("cd").token;
-  const a1 = store.createGig("ab", "x", { title: "a1" });
-  const c1 = store.createGig("cd", "x", { title: "c1" });
-  store.addLink(a1.id, c1.id, "blocks", "x");
-  store.createSpec("ab", "x", { title: "s", text: "t" });
-  store.createSpec("cd", "x", { title: "s", text: "t" });
-  afterAll(() => store.dispose());
+// Runs on Bun and, through the Worker, in workerd (see test/http.ts).
+describe("auth on (admin token)", () => {
+  const api = openApi();
+  const handle = (req: Request) => api.fetch(req);
+  let ab: string, cd: string, a1: { id: string }, c1: { id: string };
+  beforeAll(async () => {
+    const seed = async (path: string, body: unknown) => {
+      const res = await call(handle, "POST", path, "adm1n", body);
+      if (res.status !== 201) throw new Error(`seed ${path}: ${res.status} ${await res.text()}`);
+      return (await res.json()) as any;
+    };
+    await seed("/projects", { prefix: "ab" });
+    await seed("/projects", { prefix: "cd" });
+    ab = (await seed("/projects/ab/tokens", {})).token;
+    cd = (await seed("/projects/cd/tokens", {})).token;
+    c1 = await seed("/projects/cd/gigs", { title: "c1" });
+    a1 = await seed("/projects/ab/gigs", { title: "a1", blocked_by: [c1.id] });
+    await seed("/projects/ab/specs", { title: "s", text: "t" });
+    await seed("/projects/cd/specs", { title: "s", text: "t" });
+  });
+  afterAll(() => api.dispose());
 
   test("health and the UI page are public; everything else needs a valid token", async () => {
     expect(await (await call(handle, "GET", "/health")).json()).toEqual({ ok: true, auth: true });
@@ -153,8 +163,10 @@ bunDescribe("auth on (admin token)", () => {
       expect(((await res.json()) as any).error.code).toBe("forbidden");
     }
     // Nothing leaked through: the other project is unchanged.
-    expect(store.getGig(c1.id)).toMatchObject({ title: "c1", status: "open" });
-    expect(store.getDetail(a1.id).blockers.map((g) => g.id)).toEqual([c1.id]);
+    const other = (await (await call(handle, "GET", `/gigs/${c1.id}`, "adm1n")).json()) as any;
+    expect(other.gig).toMatchObject({ title: "c1", status: "open" });
+    const own = (await (await call(handle, "GET", `/gigs/${a1.id}`, "adm1n")).json()) as any;
+    expect(own.blockers.map((g: { id: string }) => g.id)).toEqual([c1.id]);
   });
 
   test("links to gigs in other projects show only the id", async () => {
@@ -178,6 +190,7 @@ bunDescribe("auth on (admin token)", () => {
   });
 });
 
+// Bun-only: the Bun server's own config.
 bunTest("config: GIGS_ADMIN_TOKEN turns auth on; a leftover server GIGS_TOKEN fails closed", () => {
   expect(configFromEnv({ GIGS_ADMIN_TOKEN: "x" }).adminToken).toBe("x");
   expect(configFromEnv({}).adminToken).toBeUndefined();
@@ -185,6 +198,7 @@ bunTest("config: GIGS_ADMIN_TOKEN turns auth on; a leftover server GIGS_TOKEN fa
   expect(configFromEnv({ GIGS_TOKEN: "client", GIGS_ADMIN_TOKEN: "x" }).adminToken).toBe("x");
 });
 
+// Bun-only: spawns the CLI against a Bun.serve server.
 bunDescribe("CLI", () => {
   const store = openStore(join(dir, "cli.db"));
   const server = Bun.serve({ port: 0, fetch: createHandler(store, { adminToken: "adm1n" }) });
