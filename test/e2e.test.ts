@@ -57,7 +57,8 @@ test("full workflow through the CLI", async () => {
 
   expect(await cliJson(["init", "gig", "--name", "Gigs"])).toMatchObject({ prefix: "gig", name: "Gigs" });
   // Auth is on and GIGS_TOKEN is the admin token: init also writes the project's first token.
-  expect(JSON.parse(readFileSync(join(repo, ".gigs.json"), "utf8"))).toEqual({ project: "gig", token: expect.stringMatching(/^gig_/) });
+  expect(JSON.parse(readFileSync(join(repo, ".gigs.json"), "utf8"))).toEqual({ project: "gig", url: server.url.href });
+  expect(JSON.parse(readFileSync(join(repo, ".gigs.local.json"), "utf8"))).toEqual({ token: expect.stringMatching(/^gig_/) });
   // Idempotent: linking an existing project succeeds.
   expect(await cliJson(["init", "gig"])).toMatchObject({ prefix: "gig", name: "Gigs" });
   const renamed = await cli(["init", "gig", "--name", "Other"]);
@@ -424,7 +425,7 @@ test("errors, help and connection failures", async () => {
   expect(badFlag.stderr).toContain("gig list --help");
 
   const badToken = await cli(["projects"], { env: { GIGS_TOKEN: "nope" } });
-  expect(badToken).toMatchObject({ code: 1, stderr: "error: missing or invalid token\n" });
+  expect(badToken).toMatchObject({ code: 1, stderr: `error: missing or invalid token (token from GIGS_TOKEN, which overrides ${join(repo, ".gigs.local.json")})\n` });
 
   const invalid = await cli(["create", "x", "-p", "9"]);
   expect(invalid).toMatchObject({ code: 1, stderr: "error: priority must be an integer from 0 to 4\n" });

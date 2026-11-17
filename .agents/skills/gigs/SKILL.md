@@ -80,11 +80,12 @@ gig unclaim <your-id>                                  # ready again once the hu
 `show <id>` · `list [--all]` · `blocked` · `update <id> [--title t] [-d text|-] [-t type] [-p n] [--parent id|none]` · `dep add|rm <id> <blocker-id> [--kind related|discovered-from]` · `defer <id> [--until 4h|2d|YYYY-MM-DD]` · `undefer <id>` · `reopen <id>`
 
 ## Auth
-Off unless the server has an admin token. On: `gig` sends `GIGS_TOKEN`, else `"token"` from `.gigs.json`.
+Off unless the server has an admin token. The binding (nearest `.gigs.json` plus gitignored `.gigs.local.json` next to it) sets project, server and token, so no env setup is needed.
+Lookup, first wins: `GIGS_URL`/`GIGS_TOKEN` env, then `.gigs.local.json`, then `.gigs.json`, then `GIGS_DEFAULT_URL` (launcher) or `http://127.0.0.1:7357`.
 A project token covers its own project only; gigs elsewhere show as `{id}`. Don't create, revoke or paste tokens unless the user asks.
 Admin token only: `gig token add [--label x]` (shown once) · `gig token list` · `gig token revoke <id>`. `gig projects` with a project token lists just its project.
 
 ## Trouble
-- unreachable: server down or wrong `GIGS_URL`; tell the user.
-- no project: `gig init <prefix>` (2-3 chars) in repo root (writes `.gigs.json`).
-- `unauthorized` (401): missing/revoked token; `forbidden` (403): token is for another project or needs admin. Tell the user.
+- unreachable: server down or wrong `GIGS_URL` / `"url"`; tell the user.
+- no project: `gig init <prefix>` (2-3 chars) in repo root (writes the binding).
+- `unauthorized` (401): missing/revoked token; `forbidden` (403): token is for another project or needs admin. The error names where the token came from; a stray `GIGS_TOKEN` overrides the binding, so retry with it unset. Otherwise tell the user.

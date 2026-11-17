@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { configFromEnv, createHandler } from "../src/server";
@@ -206,19 +206,20 @@ bunDescribe("CLI", () => {
     const init = await cli(["init", "rp", "--name", "Repo"], { GIGS_TOKEN: "adm1n" });
     expect(init.code).toBe(0);
     expect(JSON.parse(init.stdout)).toMatchObject({ prefix: "rp", name: "Repo", token_id: expect.any(Number) });
-    const config = JSON.parse(readFileSync(join(repo, ".gigs.json"), "utf8"));
-    expect(Object.keys(config)).toEqual(["project", "token"]);
+    expect(JSON.parse(readFileSync(join(repo, ".gigs.json"), "utf8"))).toEqual({ project: "rp", url: server.url.href });
+    const config = JSON.parse(readFileSync(join(repo, ".gigs.local.json"), "utf8"));
+    expect(Object.keys(config)).toEqual(["token"]);
     expect(store.tokenProject(config.token)).toBe("rp");
 
-    // No env token: the .gigs.json token is used, also from a subdirectory.
+    // No env token: the binding's token is used, also from a subdirectory.
     expect(JSON.parse((await cli(["create", "hello"], {}, join(repo, "sub"))).stdout)).toMatchObject({ id: "rp-1" });
     // GIGS_TOKEN overrides it.
-    expect(await cli(["list"], { GIGS_TOKEN: "wrong" })).toMatchObject({ code: 1, stderr: "error: missing or invalid token\n" });
+    expect(await cli(["list"], { GIGS_TOKEN: "wrong" })).toMatchObject({ code: 1, stderr: `error: missing or invalid token (token from GIGS_TOKEN, which overrides ${join(repo, ".gigs.local.json")})\n` });
     // Re-running init keeps the token instead of minting another.
     expect(JSON.parse((await cli(["init", "rp"], { GIGS_TOKEN: "adm1n" })).stdout)).not.toHaveProperty("token_id");
-    expect(JSON.parse(readFileSync(join(repo, ".gigs.json"), "utf8")).token).toBe(config.token);
+    expect(JSON.parse(readFileSync(join(repo, ".gigs.local.json"), "utf8")).token).toBe(config.token);
     expect(store.listTokens("rp")).toHaveLength(1);
-    // A project token can link its own existing project, and lists only that one.
+    // A project token can bind to its own existing project, and lists only that one.
     expect((await cli(["init", "rp"])).code).toBe(0);
     expect(JSON.parse((await cli(["projects"])).stdout).map((p: any) => p.prefix)).toEqual(["rp"]);
   });
@@ -234,7 +235,7 @@ bunDescribe("CLI", () => {
     const revoked = JSON.parse((await cli(["token", "revoke", String(created.id)], { GIGS_TOKEN: "adm1n" })).stdout);
     expect(revoked).toMatchObject({ id: created.id, revoked_at: expect.any(String) });
     expect((await cli(["list", "-P", "rp"], { GIGS_TOKEN: created.token })).code).toBe(1);
-    expect(await cli(["token", "add"])).toMatchObject({ code: 1, stderr: "error: needs the admin token\n" });
+    expect(await cli(["token", "add"])).toMatchObject({ code: 1, stderr: `error: needs the admin token (token from ${join(repo, ".gigs.local.json")})\n` });
     expect((await cli(["token", "nope"], { GIGS_TOKEN: "adm1n" })).code).toBe(1);
   });
 
@@ -246,7 +247,8 @@ bunDescribe("CLI", () => {
     writeFileSync(join(offRepo, ".gigs.json"), "{}");
     try {
       expect((await cli(["init", "of"], { GIGS_URL: off.url.href }, offRepo)).code).toBe(0);
-      expect(JSON.parse(readFileSync(join(offRepo, ".gigs.json"), "utf8"))).toEqual({ project: "of" });
+      expect(JSON.parse(readFileSync(join(offRepo, ".gigs.json"), "utf8"))).toEqual({ project: "of", url: off.url.href });
+      expect(existsSync(join(offRepo, ".gigs.local.json"))).toBe(false);
     } finally {
       off.stop(true);
       offStore.dispose();
