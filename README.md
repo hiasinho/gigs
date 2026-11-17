@@ -137,10 +137,13 @@ executable per platform (about 100 MB: the Bun runtime included, with the UI pag
 skill embedded), so the machine needs no checkout and no Bun:
 
 ```sh
-curl -fL -o ~/.local/bin/gig https://github.com/hiasinho/gigs/releases/latest/download/gig-linux-x64
-chmod +x ~/.local/bin/gig       # also gig-linux-arm64, gig-darwin-x64, gig-darwin-arm64
+curl -fsSL https://raw.githubusercontent.com/hiasinho/gigs/main/install.sh | sh
 gig upgrade                     # later: replace it with the latest release (--check: only report)
 ```
+
+`install.sh` picks the asset for this machine (`gig-{linux,darwin}-{x64,arm64}`), checks it against
+the release's `SHA256SUMS` and installs it to `~/.local/bin/gig`. Set `GIG_VERSION=v0.1.0` for a
+given release or `GIG_INSTALL_DIR` for another directory (put them on `sh`: `… | GIG_VERSION=v0.1.0 sh`).
 
 `gig version` prints the release tag. `gig upgrade <tag>` installs a given release (also to go
 back); every download is checked against the release's `SHA256SUMS`. To talk to a hosted server by
