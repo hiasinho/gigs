@@ -6,6 +6,7 @@
     "gig": "src/cli.ts"
   },
   "scripts": {
+    "build": "bun scripts/build.ts",
     "test": "bun test",
     "test:do": "vitest run",
     "check": "tsc --noEmit && bun test && bun run test:do"

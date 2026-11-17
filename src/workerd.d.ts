@@ -4,3 +4,8 @@ declare module "cloudflare:workers" {
     constructor(ctx: unknown, env: unknown);
   }
 }
+// Text imports (`with { type: "text" }`) of the agent skill.
+declare module "*.md" {
+  const text: string;
+  export default text;
+}

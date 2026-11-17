@@ -130,7 +130,20 @@ an empty database).
 
 ## Installing `gig`
 
-From a checkout, after `bun install`, either run `bun link` (uses the `bin` entry in
+### As a single binary
+
+`bun run build` compiles `dist/gig` for this machine: one self-contained executable (about 100 MB,
+the Bun runtime included, with the UI page and the agent skill embedded), so the target machine
+needs no checkout and no Bun. `bun scripts/build.ts --all` cross-compiles
+`dist/gig-{linux,darwin}-{x64,arm64}`. Copy the one you need to the other machine as
+`~/.local/bin/gig`, and `chmod +x` it. To talk to a hosted server by default, set
+`GIGS_DEFAULT_URL` in your shell profile (see below). `gig skill` prints the agent skill; install it with
+`mkdir -p ~/.claude/skills/gigs && gig skill > ~/.claude/skills/gigs/SKILL.md`. The binary is the server too:
+`gig serve`.
+
+### From a checkout
+
+After `bun install`, either run `bun link` (uses the `bin` entry in
 `package.json`), or put a small launcher on your `PATH`, e.g. `~/.local/bin/gig`:
 
 ```sh

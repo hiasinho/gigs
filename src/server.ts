@@ -6,11 +6,14 @@ import { createHandler as createApiHandler, type HandlerOptions } from "./handle
 import { BunSql } from "./sql-bun";
 import { Store, validClaimTtl } from "./store";
 
-const UI_PATH = new URL("./ui.html", import.meta.url).pathname;
+// Embedded (a text import, not Bun's HTML bundle), so `gig serve` works from a compiled binary too.
+// Bun's types still say HTMLBundle.
+import uiHtml from "./ui.html" with { type: "text" };
+const UI = uiHtml as unknown as string;
 
-/** The API handler, serving ui.html from disk at `GET /`. */
+/** The API handler, serving ui.html at `GET /`. */
 export function createHandler(store: Store, options: HandlerOptions = {}) {
-  return createApiHandler(store, { ui: () => Bun.file(UI_PATH), ...options });
+  return createApiHandler(store, { ui: () => UI, ...options });
 }
 
 export interface ServerConfig {

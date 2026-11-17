@@ -5,6 +5,8 @@ import { type ActorSource, BINDING_FILE, type Binding, connection, findBinding, 
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { Client, type GigChangesInput } from "./client";
 import { configFromEnv, serve } from "./server";
+// Embedded (a text import), so `gig skill` works from a compiled binary too.
+import skillText from "../.agents/skills/gigs/SKILL.md" with { type: "text" };
 import { GigsError, formatReasons as reasonText, type Gig, type GigDetail, type GigSummary, type LinkKind, type Project, type Spec, type TextEdit, type Token } from "./store";
 
 type Options = NonNullable<ParseArgsConfig["options"]>;
@@ -567,12 +569,10 @@ const COMMANDS: Record<string, Command> = {
     usage: "skill",
     summary: "print the agent skill (SKILL.md) that teaches the gig workflow",
     async run() {
-      process.stdout.write(readFileSync(SKILL_PATH, "utf8"));
+      process.stdout.write(skillText);
     },
   },
 };
-
-const SKILL_PATH = join(import.meta.dir, "../.agents/skills/gigs/SKILL.md");
 
 function wrapHelp(text: string, indent: string, continuation = indent): string {
   const lines: string[] = [];
