@@ -1,4 +1,4 @@
-import { GigsError, type Dump, type Gig, type GigDetail, type Comment, type Project, type Reason, type Spec, type TextEdit, type SpecHistory, type Token } from "./store";
+import { GigsError, type Dump, type ImportResult, type Gig, type GigDetail, type Comment, type Project, type Reason, type Spec, type TextEdit, type SpecHistory, type Token } from "./store";
 
 export interface ClientOptions {
   url: string;
@@ -87,7 +87,7 @@ export class Client {
 
   /** Needs the admin token and an empty server at the dump's schema version; answers rows imported per table. */
   importDump(dump: unknown) {
-    return this.request<{ version: number; tables: Record<string, number> }>("POST", "/admin/import", dump);
+    return this.request<ImportResult>("POST", "/admin/import", dump);
   }
 
   listProjects() {

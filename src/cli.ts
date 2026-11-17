@@ -122,7 +122,7 @@ const COMMANDS: Record<string, Command> = {
 
   admin: {
     usage: "admin export | admin import <file|->",
-    summary: "move a whole database between servers; needs the admin token. `export` writes the dump (JSON: schema version and every table's rows) to stdout; `import` loads one into the server, which must be empty and at the same schema version, keeping ids, counters, timestamps and claims, and prints the rows imported per table",
+    summary: "move a whole database between servers; needs the admin token. `export` writes the dump (always JSON: schema version and every table's rows) to stdout; `import` loads one into the server, which must be empty and at the same schema version, keeping ids, counters, timestamps and claims, and prints the rows imported per table",
     async run({ args, json, print, client }) {
       const action = arg(args, 0, "export|import");
       if (args.length > (action === "import" ? 2 : 1)) throw new Error("too many arguments (see `gig admin --help`)");
@@ -134,7 +134,7 @@ const COMMANDS: Record<string, Command> = {
         const dump = await readDump(arg(args, 1, "file"));
         const result = await client().importDump(dump).catch((err) => {
           // 409: the target has rows or another schema version.
-          if (err instanceof GigsError && err.status === 409) err.message = `import refused: ${err.message}`;
+          if (err instanceof GigsError && err.code === "conflict") err.message = `import refused: ${err.message}`;
           throw err;
         });
         if (json) return print(result);
@@ -620,7 +620,7 @@ export async function main(argv: string[]) {
 
   const maxArgs: Record<string, number> = {
     serve: 0, init: 1, projects: 0, list: 0, ready: 0, blocked: 0,
-    dep: 3, admin: 2, show: 1, update: 1, claim: 1, unclaim: 1, heartbeat: 1,
+    dep: 3, show: 1, update: 1, claim: 1, unclaim: 1, heartbeat: 1,
     reopen: 1, defer: 1, undefer: 1, skill: 0,
   };
   if (parsed.positionals.length > (maxArgs[name] ?? Infinity)) {

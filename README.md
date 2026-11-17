@@ -95,7 +95,7 @@ bun scripts/deploy.ts [--secret]              # without one: the same through th
 `~/.config/gigs/admin-token`.
 
 To back up or move a whole database between servers (either kind), with the admin token in
-`GIGS_TOKEN` and `GIGS_URL` pointing at the server:
+`GIGS_TOKEN` (a binding's project token is refused) and `GIGS_URL` pointing at the server:
 
 ```sh
 GIGS_URL=<from> GIGS_TOKEN=<admin token> gig admin export > dump.json

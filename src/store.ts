@@ -871,7 +871,7 @@ export class Store {
    * Loads a dump from exportDump into this database, which must have no rows and the same schema version.
    * One transaction, rows exactly as given (ids, counters, timestamps, claims), referenced rows first.
    */
-  importDump(dump: unknown): { version: number; tables: Record<string, number> } {
+  importDump(dump: unknown): ImportResult {
     if (!isDump(dump)) throw badRequest("a dump is { version: number, tables: { [table]: row objects[] } }");
     return this.sql.transaction(() => {
       const version = this.sql.version();
@@ -1139,6 +1139,12 @@ export class Store {
 
 type Row = Record<string, SqlValue>;
 /** A whole database, as GET /admin/export returns it and POST /admin/import takes it. */
+/** What importDump loaded: the schema version and rows imported per table. */
+export interface ImportResult {
+  version: number;
+  tables: Record<string, number>;
+}
+
 export interface Dump {
   version: number;
   tables: Record<string, Row[]>;
