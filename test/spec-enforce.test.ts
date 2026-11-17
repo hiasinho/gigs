@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createHandler } from "../src/server";
 import { GigsError, Store } from "../src/store";
 import { bunDescribe, openStore } from "./harness";
+import { ADMIN_TOKEN, openTestServer } from "./http";
 
 // Pointing a gig at a spec (create with spec, update to a different spec) needs a ready or active spec.
 
@@ -116,17 +117,36 @@ describe("store", () => {
   });
 });
 
-bunDescribe("http and cli", () => {
-  const store = openStore(join(dir, "http.db"));
-  const server = Bun.serve({ port: 0, fetch: createHandler(store, { adminToken: "t0k" }) });
-  const handle = createHandler(store, { adminToken: "t0k" });
-  afterAll(() => { server.stop(true); store.dispose(); });
+// Runs on Bun and, through the Worker, in workerd (see test/http.ts).
+describe("http", () => {
+  const api = openTestServer();
+  afterAll(() => api.dispose());
 
   function call(method: string, path: string, opts: { body?: unknown; actor?: string } = {}) {
-    const headers: Record<string, string> = { Authorization: "Bearer t0k" };
+    const headers: Record<string, string> = { Authorization: `Bearer ${ADMIN_TOKEN}` };
     if (opts.actor !== undefined) headers["X-Gigs-Actor"] = opts.actor;
-    return handle(new Request(`http://gigs${path}`, { method, headers, body: opts.body === undefined ? undefined : JSON.stringify(opts.body) }));
+    return api.fetch(new Request(`http://gigs${path}`, { method, headers, body: opts.body === undefined ? undefined : JSON.stringify(opts.body) }));
   }
+
+  test("http: 409 with the lifecycle code and message on create and update", async () => {
+    await api.seed("/projects", { prefix: "eh" });
+    const s = await api.seed("/projects/eh/specs", { title: "Agreement", text: "x" }, "a");
+    const created = await call("POST", "/projects/eh/gigs", { actor: "a", body: { title: "w", spec: s.id } });
+    expect(created.status).toBe(409);
+    expect(await created.json()).toEqual({ error: { code: "spec_draft", message: draftMessage(s.id) } });
+    const free = await api.seed("/projects/eh/gigs", { title: "free" }, "a");
+    expect((await call("POST", `/specs/${s.id}/close`, { actor: "a", body: { reason: "dropped" } })).status).toBe(200);
+    const updated = await call("PATCH", `/gigs/${free.id}`, { actor: "a", body: { spec: s.id } });
+    expect(updated.status).toBe(409);
+    expect(await updated.json()).toEqual({ error: { code: "spec_closed", message: closedMessage(s.id) } });
+  });
+});
+
+// Bun-only: drives the CLI against a Bun.serve server.
+bunDescribe("cli", () => {
+  const store = openStore(join(dir, "cli.db"));
+  const server = Bun.serve({ port: 0, fetch: createHandler(store, { adminToken: "t0k" }) });
+  afterAll(() => { server.stop(true); store.dispose(); });
 
   async function cli(args: string[]) {
     const proc = Bun.spawn([process.execPath, join(import.meta.dir, "../src/cli.ts"), ...args], {
@@ -142,19 +162,6 @@ bunDescribe("http and cli", () => {
     if (r.code !== 0) throw new Error(`gig ${args.join(" ")} failed: ${r.stderr}`);
     return JSON.parse(r.stdout);
   }
-
-  test("http: 409 with the lifecycle code and message on create and update", async () => {
-    store.createProject("eh");
-    const s = store.createSpec("eh", "a", { title: "Agreement", text: "x" });
-    const created = await call("POST", "/projects/eh/gigs", { actor: "a", body: { title: "w", spec: s.id } });
-    expect(created.status).toBe(409);
-    expect(await created.json()).toEqual({ error: { code: "spec_draft", message: draftMessage(s.id) } });
-    const free = store.createGig("eh", "a", { title: "free" });
-    store.closeSpec(s.id, "a", "dropped");
-    const updated = await call("PATCH", `/gigs/${free.id}`, { actor: "a", body: { spec: s.id } });
-    expect(updated.status).toBe(409);
-    expect(await updated.json()).toEqual({ error: { code: "spec_closed", message: closedMessage(s.id) } });
-  });
 
   test("cli: refusals print the message; the documented ways out work", async () => {
     store.createProject("ef");

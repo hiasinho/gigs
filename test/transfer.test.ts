@@ -91,6 +91,7 @@ test("import refuses a database that has data, another schema version, or an unk
   expect(store.listProjects()).toEqual([]);
 });
 
+// Bun-only: test/do/worker-entry.ts checks the same through the Worker.
 bunTest("the endpoints are admin-only", async () => {
   const handle = createHandler(store, { adminToken: "adm1n" });
   const token = store.createToken("cd").token;

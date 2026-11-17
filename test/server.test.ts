@@ -1,25 +1,18 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { configFromEnv, createHandler } from "../src/server";
-import { Store } from "../src/store";
-import { openStore } from "./harness";
+import { configFromEnv } from "../src/server";
+import { bunTest } from "./harness";
+import { ADMIN_TOKEN, openTestServer } from "./http";
 
-const dir = mkdtempSync(join(tmpdir(), "gigs-server-"));
-const store = openStore(join(dir, "gigs.db"));
-const handle = createHandler(store, { adminToken: "s3cret" });
-
-afterAll(() => {
-  store.dispose();
-  rmSync(dir, { recursive: true, force: true });
-});
+// Runs on Bun and, through the Worker, in workerd (see test/http.ts).
+const api = openTestServer();
+afterAll(() => api.dispose());
+const seed = api.seed;
 
 function call(method: string, path: string, opts: { body?: string; actor?: string; token?: string | null } = {}) {
   const headers: Record<string, string> = {};
-  if (opts.token !== null) headers.Authorization = `Bearer ${opts.token ?? "s3cret"}`;
+  if (opts.token !== null) headers.Authorization = `Bearer ${opts.token ?? ADMIN_TOKEN}`;
   if (opts.actor !== undefined) headers["X-Gigs-Actor"] = opts.actor;
-  return handle(new Request(`http://gigs${path}`, { method, headers, body: opts.body }));
+  return api.fetch(new Request(`http://gigs${path}`, { method, headers, body: opts.body }));
 }
 
 test("health needs no token; everything else does", async () => {
@@ -38,7 +31,8 @@ test("malformed URL escapes authenticate first, then return JSON bad_request", a
   }
 });
 
-test("claim TTL must be finite and representable as a Date", () => {
+// Bun-only: the Bun server's own config.
+bunTest("claim TTL must be finite and representable as a Date", () => {
   for (const value of ["Infinity", "1e300", "1e10"]) {
     expect(() => configFromEnv({ GIGS_CLAIM_TTL_MINUTES: value })).toThrow();
   }
@@ -96,8 +90,8 @@ test("auth and actor requirements cover all mutation routes, including errors", 
 });
 
 test("encoded case-insensitive IDs and JSON object validation", async () => {
-  store.createProject("ur");
-  const gig = store.createGig("ur", "fixture", { title: "encoded" });
+  await seed("/projects", { prefix: "ur" });
+  const gig = await seed("/projects/ur/gigs", { title: "encoded" });
   const detail = await call("GET", "/gigs/%55%52%2D1");
   expect(detail.status).toBe(200);
   expect(await detail.json()).toMatchObject({ gig: { id: gig.id } });
@@ -108,7 +102,8 @@ test("encoded case-insensitive IDs and JSON object validation", async () => {
   }
 });
 
-test("config from env", () => {
+// Bun-only: the Bun server's own config.
+bunTest("config from env", () => {
   expect(configFromEnv({ GIGS_PORT: "1234", GIGS_DB: "/x.db", GIGS_ADMIN_TOKEN: "t" })).toEqual({
     host: "127.0.0.1",
     port: 1234,
@@ -141,8 +136,8 @@ test("slice 3 routes: update, heartbeat, defer, undefer, comments", async () => 
 });
 
 test("spec routes: create, list, show, update, spec filters and claim within a spec", async () => {
-  store.createProject("sp");
-  store.createProject("so");
+  await seed("/projects", { prefix: "sp" });
+  await seed("/projects", { prefix: "so" });
   const post = (path: string, body?: unknown) => call("POST", path, { actor: "a", body: body === undefined ? undefined : JSON.stringify(body) });
   const created = await post("/projects/sp/specs", { title: "Agreement", text: "We agree." });
   expect(created.status).toBe(201);
@@ -183,8 +178,8 @@ test("spec routes: create, list, show, update, spec filters and claim within a s
 });
 
 test("spec edit, history and version routes validate inputs and preserve snapshots", async () => {
-  store.createProject("vh");
-  const spec = store.createSpec("vh", "creator", { title: "Agreement", text: "one two two" });
+  await seed("/projects", { prefix: "vh" });
+  const spec = await seed("/projects/vh/specs", { title: "Agreement", text: "one two two" }, "creator");
   const path = `/specs/${spec.id}`;
   const edits = [{ old: "one", new: "first" }, { old: "first two two", new: "final" }];
   expect((await call("POST", `${path}/edits`, { body: JSON.stringify({ edits }) })).status).toBe(400);
@@ -214,7 +209,7 @@ test("spec edit, history and version routes validate inputs and preserve snapsho
 });
 
 test("label routes: set on create, change via PATCH, filter list and ready by query", async () => {
-  store.createProject("lb");
+  await seed("/projects", { prefix: "lb" });
   const post = (path: string, body: unknown) => call("POST", path, { actor: "a", body: JSON.stringify(body) });
   const patch = (id: string, body: unknown) => call("PATCH", `/gigs/${id}`, { actor: "a", body: JSON.stringify(body) });
   const a = (await (await post("/projects/lb/gigs", { title: "a", labels: ["agent", "triage:ready"] })).json()) as any;
@@ -236,7 +231,7 @@ test("label routes: set on create, change via PATCH, filter list and ready by qu
 });
 
 test("human routes: set on create and via PATCH, filter list and ready, claim-next skips them", async () => {
-  store.createProject("hu");
+  await seed("/projects", { prefix: "hu" });
   const post = (path: string, body: unknown) => call("POST", path, { actor: "a", body: JSON.stringify(body) });
   const h = (await (await post("/projects/hu/gigs", { title: "ask", human: true, priority: 0 })).json()) as any;
   expect(h.human).toBe(true);
@@ -255,8 +250,8 @@ test("human routes: set on create and via PATCH, filter list and ready, claim-ne
 });
 
 test("gig edit route: find/replace on the description, validation and conflicts", async () => {
-  store.createProject("be");
-  const gig = store.createGig("be", "a", { title: "Edit me", description: "one two two" });
+  await seed("/projects", { prefix: "be" });
+  const gig = await seed("/projects/be/gigs", { title: "Edit me", description: "one two two" }, "a");
   const path = `/gigs/${gig.id.toUpperCase()}/edits`;
   const edits = [{ old: "one", new: "first" }, { old: "first two two", new: "" }];
   expect((await call("POST", path, { body: JSON.stringify({ edits }) })).status).toBe(400);
@@ -274,7 +269,7 @@ test("gig edit route: find/replace on the description, validation and conflicts"
 });
 
 test("claim-next and ready filters: labels, exclude labels, parent subtree; claim never hands out human gigs", async () => {
-  store.createProject("cf");
+  await seed("/projects", { prefix: "cf" });
   const post = (path: string, body?: unknown) => call("POST", path, { actor: "a", body: body === undefined ? undefined : JSON.stringify(body) });
   const create = async (body: Record<string, unknown>) => ((await (await post("/projects/cf/gigs", body)).json()) as any).id as string;
   const epic = await create({ title: "epic" });

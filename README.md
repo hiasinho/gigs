@@ -373,6 +373,6 @@ The store talks SQL through a small synchronous interface ([src/sql.ts](src/sql.
 bun:sqlite ([src/sql-bun.ts](src/sql-bun.ts), the server's) and a Durable Object's SQLite storage
 ([src/sql-do.ts](src/sql-do.ts)). `bun run test:do` runs the store-level tests inside workerd against a real
 Durable Object (vitest with `@cloudflare/vitest-plugin`; tests open databases through `test/harness.ts`),
-plus the Worker entry end to end (`test/do/worker-entry.ts`). The HTTP handler ([src/handler.ts](src/handler.ts))
+and the HTTP API tests through the Worker entry end to end (`test/http.ts`, `test/do/worker-entry.ts`). The HTTP handler ([src/handler.ts](src/handler.ts))
 is runtime-neutral; [src/server.ts](src/server.ts) (Bun, the only importer of sql-bun) and
 [src/worker.ts](src/worker.ts) (Cloudflare) are its two entries.
