@@ -83,7 +83,7 @@ gig unclaim <your-id>                                  # ready again once the hu
 Off unless the server has an admin token. The binding (nearest `.gigs.json` plus gitignored `.gigs.local.json` next to it) sets project, server and token, so no env setup is needed.
 Lookup, first wins: `GIGS_URL`/`GIGS_TOKEN` env, then `.gigs.local.json`, then `.gigs.json`, then `GIGS_DEFAULT_URL` (launcher) or `http://127.0.0.1:7357`.
 A project token covers its own project only; gigs elsewhere show as `{id}`. Don't create, revoke or paste tokens unless the user asks.
-Admin token only: `gig token add [--label x]` (shown once) · `gig token list` · `gig token revoke <id>`. `gig projects` with a project token lists just its project.
+Admin token only: `gig token add [--label x]` (shown once) · `gig token list` · `gig token revoke <id>`. `gig projects` with a project token lists just its project. `gig admin delete-project <prefix> --yes` deletes a project and everything in it for good; only when the user asks.
 
 ## Trouble
 - unreachable: server down or wrong `GIGS_URL` / `"url"`; tell the user.

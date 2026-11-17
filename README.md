@@ -108,6 +108,16 @@ imported per table. It refuses unless the target has no rows and the same schema
 HTTP these are `GET /admin/export` and `POST /admin/import` (409 for a non-empty target or another
 schema version).
 
+To delete a project for good, with everything in it (gigs, specs, labels, comments, tokens), and
+other projects' links and parents that pointed into it:
+
+```sh
+GIGS_TOKEN=<admin token> gig admin delete-project bn --yes   # refuses without --yes; prints the deleted project
+```
+
+Over HTTP: `DELETE /projects/<prefix>` with the admin token (403 for a project token, 404 for an
+unknown project), one transaction.
+
 **This setup runs on the hosted server.** Since gig-14 the whole database lives at
 `https://gigs.strapivo.dev`; the local service is stopped and disabled (its unit file and
 `~/.local/share/gigs/gigs.db` are kept as a fallback). The launcher (below) sets `GIGS_DEFAULT_URL` to the

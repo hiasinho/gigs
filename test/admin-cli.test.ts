@@ -98,4 +98,26 @@ bunDescribe("gig admin", () => {
     // Nothing got in.
     expect(empty.store.listProjects()).toEqual([]);
   });
+
+  bunTest("delete-project refuses without --yes, then deletes the project", async () => {
+    const a = start("delete");
+    seed(a.store);
+    a.store.createProject("cd");
+    const projectToken = a.store.createToken("ab").token;
+
+    expect(await cli(a.url, ["admin", "delete-project", "ab"])).toMatchObject({ code: 1, stderr: "error: deleting project ab and everything in it cannot be undone; rerun with --yes\n" });
+    expect(await cli(a.url, ["admin", "delete-project", "ab", "--yes"], projectToken)).toMatchObject({ code: 1, stderr: "error: needs the admin token (token from GIGS_TOKEN)\n" });
+    expect(await cli(a.url, ["admin", "delete-project", "zz", "--yes"])).toMatchObject({ code: 1, stderr: "error: project zz not found\n" });
+    expect((await cli(a.url, ["admin", "delete-project", "--yes"])).code).toBe(1);
+    expect((await cli(a.url, ["admin", "export", "--yes"])).code).toBe(1);
+    expect(a.store.listProjects().map((p) => p.prefix)).toEqual(["ab", "cd"]);
+
+    const deleted = await cli(a.url, ["admin", "delete-project", "ab", "--yes"]);
+    expect(deleted).toMatchObject({ code: 0, stderr: "" });
+    expect(JSON.parse(deleted.stdout)).toEqual({ prefix: "ab", name: "Alpha", created_at: "2026-01-01T00:00:00.000Z" });
+    expect(a.store.listProjects().map((p) => p.prefix)).toEqual(["cd"]);
+    expect(a.store.tokenProject(projectToken)).toBeNull();
+    a.store.createProject("ab");
+    expect(await cli(a.url, ["admin", "delete-project", "ab", "--yes", "--human"])).toMatchObject({ code: 0, stdout: "deleted project ab (ab)\n" });
+  });
 });

@@ -90,6 +90,11 @@ export class Client {
     return this.request<ImportResult>("POST", "/admin/import", dump);
   }
 
+  /** Needs the admin token: the project and everything in it, for good. */
+  deleteProject(prefix: string) {
+    return this.request<Project>("DELETE", `/projects/${enc(prefix)}`);
+  }
+
   listProjects() {
     return this.request<Project[]>("GET", "/projects");
   }

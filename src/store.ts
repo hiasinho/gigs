@@ -385,6 +385,27 @@ export class Store {
     return this.op(() => this.mustGetProject(prefix));
   }
 
+  /**
+   * Deletes the project and every row of it (gigs, specs and their versions, labels, comments, tokens),
+   * plus what other projects' gigs had pointing into it: links, and parents (set to none).
+   */
+  deleteProject(prefix: string): Project {
+    return this.op(() => {
+      const p = this.mustGetProject(prefix);
+      const gigs = "SELECT id FROM gigs WHERE project = ?";
+      this.sql.run(`DELETE FROM links WHERE gig_id IN (${gigs}) OR target_id IN (${gigs})`, p.prefix, p.prefix);
+      this.sql.run(`DELETE FROM labels WHERE gig_id IN (${gigs})`, p.prefix);
+      this.sql.run(`DELETE FROM comments WHERE gig_id IN (${gigs})`, p.prefix);
+      this.sql.run(`UPDATE gigs SET parent = NULL WHERE parent IN (${gigs})`, p.prefix);
+      this.sql.run("DELETE FROM gigs WHERE project = ?", p.prefix);
+      this.sql.run("DELETE FROM spec_versions WHERE spec_id IN (SELECT id FROM specs WHERE project = ?)", p.prefix);
+      this.sql.run("DELETE FROM specs WHERE project = ?", p.prefix);
+      this.sql.run("DELETE FROM tokens WHERE project = ?", p.prefix);
+      this.sql.run("DELETE FROM projects WHERE prefix = ?", p.prefix);
+      return p;
+    });
+  }
+
   // --- tokens ---
 
   /** A new token for the project; the plaintext `token` is returned here only, never stored. */

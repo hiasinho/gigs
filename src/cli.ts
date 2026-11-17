@@ -127,11 +127,20 @@ const COMMANDS: Record<string, Command> = {
   },
 
   admin: {
-    usage: "admin export | admin import <file|->",
-    summary: "move a whole database between servers; needs the admin token. `export` writes the dump (always JSON: schema version and every table's rows) to stdout; `import` loads one into the server, which must be empty and at the same schema version, keeping ids, counters, timestamps and claims, and prints the rows imported per table",
-    async run({ args, json, print, client }) {
-      const action = arg(args, 0, "export|import");
-      if (args.length > (action === "import" ? 2 : 1)) throw new Error("too many arguments (see `gig admin --help`)");
+    usage: "admin export | admin import <file|-> | admin delete-project <prefix> --yes",
+    summary: "server administration; needs the admin token. `export` writes the dump (always JSON: schema version and every table's rows) to stdout; `import` loads one into the server, which must be empty and at the same schema version, keeping ids, counters, timestamps and claims, and prints the rows imported per table; `delete-project` deletes a project for good: its gigs, specs, labels, comments and tokens, and other projects' links (and parents) pointing into it",
+    options: { yes: { type: "boolean" } },
+    async run({ args, values, json, print, client }) {
+      const action = arg(args, 0, "export|import|delete-project");
+      if (args.length > (action === "export" ? 1 : 2)) throw new Error("too many arguments (see `gig admin --help`)");
+      if (values.yes !== undefined && action !== "delete-project") throw new Error("--yes only works with admin delete-project");
+      if (action === "delete-project") {
+        const prefix = arg(args, 1, "prefix");
+        if (!values.yes) throw new Error(`deleting project ${prefix} and everything in it cannot be undone; rerun with --yes`);
+        const project = await client().deleteProject(prefix);
+        if (json) return print(project);
+        return console.log(`deleted project ${project.prefix} (${project.name})`);
+      }
       if (action === "export") {
         process.stdout.write(`${JSON.stringify(await client().exportDump())}\n`);
         return;
@@ -147,7 +156,7 @@ const COMMANDS: Record<string, Command> = {
         const w = Math.max(0, ...Object.keys(result.tables).map((t) => t.length));
         return console.log([`imported schema version ${result.version}`, ...Object.entries(result.tables).map(([t, n]) => `  ${t.padEnd(w)}  ${n}`)].join("\n"));
       }
-      throw new Error("expected `gig admin export|import`");
+      throw new Error("expected `gig admin export|import|delete-project`");
     },
   },
 

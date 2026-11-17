@@ -71,7 +71,8 @@ async function route(store: Store, req: Request, adminToken: string | undefined,
   const param = parts[1] ?? "";
   // `GET /projects` is open to project tokens: they see only their own project (below).
   const listProjects = key === "GET /projects";
-  if (parts[0] === "admin" || parts[0] === "tokens" || (parts[0] === "projects" && ((parts.length === 1 && !listProjects) || parts[2] === "tokens"))) adminOnly();
+  const projectAdmin = parts[0] === "projects" && ((parts.length === 1 && !listProjects) || key === "DELETE /projects/:" || parts[2] === "tokens");
+  if (parts[0] === "admin" || parts[0] === "tokens" || projectAdmin) adminOnly();
   else if (!listProjects && (parts[0] === "projects" || parts[0] === "gigs" || parts[0] === "specs")) own(param);
 
   // Moving the whole database to another server (see Store.exportDump).
@@ -98,6 +99,8 @@ async function route(store: Store, req: Request, adminToken: string | undefined,
     }
     case "GET /projects/:":
       return store.getProject(param);
+    case "DELETE /projects/:":
+      return store.deleteProject(param);
     case "GET /projects/:/gigs": {
       const q = url.searchParams;
       own(q.get("parent"), q.get("spec"));
