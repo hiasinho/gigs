@@ -152,10 +152,11 @@ gig init ws --name "Web shop"   # creates the project if missing, else binds to 
 This writes the directory's **binding**: `.gigs.json` (`{"project": "ws", "url": "..."}`; `"url"`
 only when the server isn't the built-in default). Commit it: `gig` finds the nearest one by walking
 up from the current directory, so everyone in the repo works on the same project on the same server.
-When auth is on and you run `gig init` with the admin token, it also writes a new project token to
-`.gigs.local.json` next to it (`{"token": "..."}`) and, in a git repo, adds `.gigs.local.json` to
-`.gitignore`. Every agent shell then just works, with no environment setup (direnv hooks don't run
-in non-interactive shells); re-running `init` keeps the token. Values in `.gigs.local.json`
+When auth is on, it also writes a project token to `.gigs.local.json` next to it (`{"token": "..."}`)
+and, in a git repo, adds `.gigs.local.json` to `.gitignore`: a new token when you run `gig init`
+with the admin token, or your own project token when that's what `GIGS_TOKEN` holds. The admin
+token is never written. Every agent shell then just works, with no environment setup (direnv hooks
+don't run in non-interactive shells); re-running `init` keeps the binding's token for that project. Values in `.gigs.local.json`
 override those in `.gigs.json`. An older `.gigs.json` that carries `"token"` itself keeps working;
 re-running `init` moves the token to `.gigs.local.json`.
 

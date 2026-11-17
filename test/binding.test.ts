@@ -120,12 +120,39 @@ bunDescribe("binding", () => {
   });
 });
 
-bunTest("re-binding without a token drops the old binding's token, and init's project and url win over stale local values", async () => {
+bunTest("re-binding to another project replaces the old binding's token, and init's project and url win over stale local values", async () => {
   const d = bind("rebind", { json: { project: "bd", url: server.url.href }, local: { token: bdToken, project: "bd", url: "http://127.0.0.1:1", note: "kept" } });
-  // A project token for ot can bind to ot but mints no token, so none is written.
+  // A project token for ot can bind to ot but mints no token, so it is saved itself.
   expect((await cli(["init", "ot"], d, { GIGS_URL: server.url.href, GIGS_TOKEN: otToken })).code).toBe(0);
   expect(readJson(join(d, ".gigs.json"))).toEqual({ project: "ot", url: server.url.href });
-  expect(readJson(join(d, ".gigs.local.json"))).toEqual({ note: "kept" });
+  expect(readJson(join(d, ".gigs.local.json"))).toEqual({ note: "kept", token: otToken });
+});
+
+bunTest("init with a project token in GIGS_TOKEN saves it, so a fresh shell can use the binding", async () => {
+  const d = bind("init-project-token", {});
+  mkdirSync(join(d, ".git"));
+  const env = { GIGS_URL: server.url.href, GIGS_TOKEN: bdToken };
+  const init = await cli(["init", "bd"], d, env);
+  expect(init.code).toBe(0);
+  expect(JSON.parse(init.stdout)).not.toHaveProperty("token_id");
+  expect(readJson(join(d, ".gigs.local.json"))).toEqual({ token: bdToken });
+  expect(readFileSync(join(d, ".gitignore"), "utf8")).toBe(".gigs.local.json\n");
+  expect((await cli(["init", "bd", "--human"], d, env)).stdout).toContain("wrote .gigs.json, .gigs.local.json\n");
+  expect(readFileSync(join(d, ".gitignore"), "utf8")).toBe(".gigs.local.json\n");
+  expect(await cli(["ready"], join(d, "sub"))).toMatchObject({ code: 0, stdout: "[]\n" });
+});
+
+bunTest("init keeps a binding's token for the same project over GIGS_TOKEN, and never saves the admin token", async () => {
+  const other = store.createToken("bd").token;
+  const d = bind("init-keep", { json: { project: "bd", url: server.url.href }, local: { token: bdToken } });
+  expect((await cli(["init", "bd"], d, { GIGS_TOKEN: other })).code).toBe(0);
+  expect(readJson(join(d, ".gigs.local.json"))).toEqual({ token: bdToken });
+
+  const a = bind("init-admin", {});
+  expect((await cli(["init", "bd"], a, { GIGS_URL: server.url.href, GIGS_TOKEN: "adm1n" })).code).toBe(0);
+  const { token } = readJson(join(a, ".gigs.local.json"));
+  expect(token).not.toBe("adm1n");
+  expect(store.tokenProject(token)).toBe("bd");
 });
 
 bunTest("a malformed binding file names itself", async () => {
