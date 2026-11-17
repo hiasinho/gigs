@@ -81,7 +81,7 @@ const COMMANDS: Record<string, Command> = {
       let token = existing?.project === project.prefix ? existing.token : undefined;
       let minted: Token | undefined;
       const auth = (await c.health()).auth;
-      // A saved token the server turns down (revoked, invalid, another project's) is replaced like a missing one.
+      // The binding's token, if the server turns it down (revoked, invalid, another project's), is replaced like a missing one.
       if (auth && token && token !== callerToken && !(await tokenWorks(url, token, project.prefix))) token = undefined;
       if (!token && auth) {
         try {
@@ -655,7 +655,7 @@ export async function main(argv: string[]) {
     await command.run(ctx);
   } catch (err) {
     // A rejected token: say where it came from, since GIGS_TOKEN silently overrides the binding's.
-    if (err instanceof GigsError && (err.status === 401 || err.status === 403)) err.message += ` (${tokenHint(conn, binding)})`;
+    if (isRejectedToken(err)) err.message += ` (${tokenHint(conn, binding)})`;
     throw err;
   }
 }
@@ -670,13 +670,18 @@ function findCommand(argv: string[]): number {
   return -1;
 }
 
+/** The server turned the token down: missing, invalid, revoked, or for another project. */
+function isRejectedToken(err: unknown): err is GigsError {
+  return err instanceof GigsError && (err.status === 401 || err.status === 403);
+}
+
 /** Whether the server accepts `token` for `project`; other errors (server unreachable) are thrown. */
 async function tokenWorks(url: string, token: string, project: string): Promise<boolean> {
   try {
     await new Client({ url, token, actor: "init" }).getProject(project);
     return true;
   } catch (err) {
-    if (err instanceof GigsError && (err.status === 401 || err.status === 403)) return false;
+    if (isRejectedToken(err)) return false;
     throw err;
   }
 }

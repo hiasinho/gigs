@@ -167,8 +167,9 @@ and, in a git repo, adds `.gigs.local.json` to `.gitignore`: a new token when yo
 with the admin token, or your own project token when that's what `GIGS_TOKEN` holds. The admin
 token is never written. Every agent shell then just works, with no environment setup (direnv hooks
 don't run in non-interactive shells); re-running `init` keeps the binding's token for that
-project while the server accepts it, and replaces a revoked or invalid one the same way. Values in `.gigs.local.json` override those in `.gigs.json`. An older `.gigs.json` that
-carries `"token"` itself keeps working; re-running `init` moves the token to `.gigs.local.json`.
+project while the server accepts it, and replaces a revoked or invalid one the same way. Values
+in `.gigs.local.json` override those in `.gigs.json`. An older `.gigs.json` that carries `"token"`
+itself keeps working; re-running `init` moves the token to `.gigs.local.json`.
 
 ## Core concepts
 
