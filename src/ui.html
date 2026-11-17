@@ -7,9 +7,17 @@
   body { font: 14px/1.5 ui-monospace, monospace; max-width: 52rem; margin: 2rem auto; padding: 0 1rem; }
   a { color: inherit; }
   h2 { font-size: 1em; margin: 1.5em 0 .3em; opacity: .6; }
+  h2:has(.st) { opacity: 1; }
   ul { list-style: none; padding: 0; margin: 0; }
   li { padding: .1em 0; }
   .dim { opacity: .55; }
+  .st { font-weight: bold; }
+  .in_progress { color: #3b82f6; }
+  .ready, .active { color: #16a34a; }
+  .blocked { color: #dc2626; }
+  .deferred, .draft { color: #a855f7; }
+  .open { color: #ca8a04; }
+  .closed, .done { color: #888; }
   pre { white-space: pre-wrap; margin: .3em 0 1em; }
 </style>
 <nav><a href="#">gigs</a> <span id="crumb"></span></nav>
@@ -18,6 +26,7 @@
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 const link = (g) => `<a href="#g/${esc(g.id)}">${esc(g.id)}</a> ${esc(g.title)}`;
+const st = (status) => `<span class="st ${esc(status)}">${esc(String(status).replace("_", " "))}</span>`;
 const ago = (t) => (t ? new Date(t).toLocaleString() : "");
 
 async function api(path) {
@@ -41,7 +50,7 @@ const specLink = (s) => `<a href="#s/${esc(s.id)}">${esc(s.id)}</a> ${esc(s.titl
 
 async function project(id) {
   const [gigs, ready, specs] = await Promise.all([api(`/projects/${id}/gigs?all=1`), api(`/projects/${id}/ready`), api(`/projects/${id}/specs?all=1`)]);
-  return (specs.length ? `<h2>specs (${specs.length})</h2><ul>${specs.map((s) => `<li>${specLink(s)} <span class=dim>${esc(s.status)}</span></li>`).join("")}</ul>` : "") +
+  return (specs.length ? `<h2>specs (${specs.length})</h2><ul>${specs.map((s) => `<li>${specLink(s)} ${st(s.status)}</li>`).join("")}</ul>` : "") +
     gigGroups(gigs, ready);
 }
 
@@ -50,9 +59,9 @@ async function spec(id) {
   const gigs = await api(`/projects/${encodeURIComponent(s.project)}/gigs?spec=${id}&all=1`);
   $("#crumb").innerHTML = `/ <a href="#p/${esc(s.project)}">${esc(s.project)}</a>`;
   return `<h1 style="font-size:1.2em">${esc(s.id)} ${esc(s.title)}</h1>
-    <div class=dim>${esc(s.status)} · v${esc(s.version)}<br>created ${ago(s.created_at)} by ${esc(s.created_by)}${s.closed_at ? `<br>closed ${ago(s.closed_at)}: ${esc(s.close_reason)}` : ""}</div>
+    <div>${st(s.status)} <span class=dim>· v${esc(s.version)}<br>created ${ago(s.created_at)} by ${esc(s.created_by)}${s.closed_at ? `<br>closed ${ago(s.closed_at)}: ${esc(s.close_reason)}` : ""}</span></div>
     <pre>${esc(s.text)}</pre>
-    ${gigs.length ? `<h2>gigs (${gigs.length})</h2><ul>${gigs.map((g) => `<li>${link(g)} <span class=dim>${esc(g.status)}</span></li>`).join("")}</ul>` : ""}`;
+    ${gigs.length ? `<h2>gigs (${gigs.length})</h2><ul>${gigs.map((g) => `<li>${link(g)} ${st(g.status)}</li>`).join("")}</ul>` : ""}`;
 }
 
 function gigGroups(gigs, ready) {
@@ -61,7 +70,7 @@ function gigGroups(gigs, ready) {
   for (const g of gigs) groups[g.status === "open" ? (readyIds.has(g.id) ? "ready" : "blocked") : g.status].push(g);
   groups.closed.sort((a, b) => (b.closed_at ?? "").localeCompare(a.closed_at ?? ""));
   return Object.entries(groups).filter(([, gs]) => gs.length).map(([name, gs]) =>
-    `<h2>${name.replace("_", " ")} (${gs.length})</h2><ul>` +
+    `<h2>${st(name)} (${gs.length})</h2><ul>` +
     gs.map((g) => `<li>${link(g)} <span class="dim">p${g.priority} ${g.type}${g.human ? " human" : ""}${g.claimed_by ? " @" + esc(g.claimed_by) : ""}${g.labels?.length ? " #" + g.labels.map(esc).join(" #") : ""}</span></li>`).join("") +
     "</ul>").join("") || "<p class=dim>no gigs</p>";
 }
@@ -70,11 +79,12 @@ async function gig(id) {
   const d = await api(`/gigs/${id}`);
   const g = d.gig;
   $("#crumb").innerHTML = `/ <a href="#p/${esc(g.project)}">${esc(g.project)}</a>`;
-  const rel = (name, list) => (list?.length ? `<h2>${name}</h2><ul>${list.map((x) => `<li>${link(x)} <span class=dim>${esc(x.status)}</span></li>`).join("")}</ul>` : "");
-  const meta = [g.status, g.type, `p${g.priority}`, g.human && "human", g.claimed_by && `@${g.claimed_by}`, ...(g.labels ?? []).map((l) => `#${l}`)].filter(Boolean).map(esc).join(" · ") +
+  const rel = (name, list) => (list?.length ? `<h2>${name}</h2><ul>${list.map((x) => `<li>${link(x)} ${st(x.status)}</li>`).join("")}</ul>` : "");
+  const meta = [g.type, `p${g.priority}`, g.human && "human", g.claimed_by && `@${g.claimed_by}`, ...(g.labels ?? []).map((l) => `#${l}`)].filter(Boolean).map(esc).join(" · ") +
     (g.spec ? ` · spec <a href="#s/${esc(g.spec)}">${esc(g.spec)}</a>` : "");
   return `<h1 style="font-size:1.2em">${esc(g.id)} ${esc(g.title)}</h1>
-    <div class=dim>${meta}<br>created ${ago(g.created_at)} by ${esc(g.created_by)}${g.closed_at ? `<br>closed ${ago(g.closed_at)}: ${esc(g.close_reason)}` : ""}</div>
+    <div>${st(g.status === "open" ? (d.ready ? "ready" : "blocked") : g.status)} <span class=dim>· ${meta}</span></div>
+    <div class=dim>created ${ago(g.created_at)} by ${esc(g.created_by)}${g.closed_at ? `<br>closed ${ago(g.closed_at)}: ${esc(g.close_reason)}` : ""}</div>
     ${g.description ? `<pre>${esc(g.description)}</pre>` : ""}
     ${d.parent ? rel("parent", [d.parent]) : ""}${rel("children", d.children)}${rel("blocked by", d.blockers)}${rel("blocks", d.blocks)}
     ${rel("related", d.related)}${rel("discovered from", d.discovered_from)}${rel("discovered", d.discovered)}
