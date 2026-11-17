@@ -44,6 +44,8 @@ async function api(path, token = localStorage.getItem("gigs-token")) {
 
 async function projects() {
   const ps = await api("/projects");
+  // One project (e.g. a project token): open it. replace() keeps home out of history, so Back doesn't bounce here again.
+  if (ps.length === 1) location.replace(`#p/${encodeURIComponent(ps[0].prefix)}`); // hashchange renders
   return ps.map((p) => `<li><a href="#p/${esc(p.prefix)}">${esc(p.prefix)}</a> ${esc(p.name)}</li>`).join("");
 }
 
