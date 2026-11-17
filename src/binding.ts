@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 /** The server `gig` talks to when nothing else names one. */
@@ -54,8 +54,13 @@ export function readBinding(dir: string): Binding | undefined {
 export function writeBinding(dir: string, binding: { project: string; url: string; token?: string }): string[] {
   const json = binding.url === BUILTIN_URL ? { project: binding.project } : { project: binding.project, url: binding.url };
   writeFileSync(join(dir, BINDING_FILE), JSON.stringify(json, null, 2) + "\n");
+  // The local file keeps keys init doesn't own; its stale project, url or token would override this binding.
+  const localFile = join(dir, LOCAL_FILE);
+  const { project: _p, url: _u, token: _t, ...rest } = readJson(localFile) ?? {};
+  const local = binding.token ? { ...rest, token: binding.token } : rest;
+  if (Object.keys(local).length) writeFileSync(localFile, JSON.stringify(local, null, 2) + "\n");
+  else if (existsSync(localFile)) rmSync(localFile);
   if (!binding.token) return [BINDING_FILE];
-  writeFileSync(join(dir, LOCAL_FILE), JSON.stringify({ token: binding.token }, null, 2) + "\n");
   return [BINDING_FILE, LOCAL_FILE, ...(ignoreLocalFile(dir) ? [".gitignore"] : [])];
 }
 
@@ -70,17 +75,19 @@ function ignoreLocalFile(dir: string): boolean {
 }
 
 function inGitRepo(dir: string): boolean {
-  for (; ; dir = dirname(dir)) {
-    if (existsSync(join(dir, ".git"))) return true;
-    if (dirname(dir) === dir) return false;
-  }
+  return walkUp(dir, (d) => existsSync(join(d, ".git")) || undefined) ?? false;
 }
 
 /** The nearest binding, walking up from `dir`. */
 export function findBinding(dir: string): Binding | undefined {
+  return walkUp(dir, readBinding);
+}
+
+/** The first result of `f` for `dir` or one of its ancestors. */
+function walkUp<T>(dir: string, f: (dir: string) => T | undefined): T | undefined {
   for (; ; dir = dirname(dir)) {
-    const binding = readBinding(dir);
-    if (binding) return binding;
+    const found = f(dir);
+    if (found !== undefined) return found;
     if (dirname(dir) === dir) return undefined;
   }
 }
@@ -100,8 +107,10 @@ export function tokenHint(conn: Connection, binding: Binding | undefined): strin
 
 function readJson(file: string): Record<string, unknown> | undefined {
   if (!existsSync(file)) return undefined;
-  const value = JSON.parse(readFileSync(file, "utf8"));
-  return value && typeof value === "object" ? value : {};
+  let value: unknown;
+  try { value = JSON.parse(readFileSync(file, "utf8")); }
+  catch (err) { throw new Error(`${file}: invalid JSON (${err instanceof Error ? err.message : err})`); }
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 function str(value: unknown): string | undefined {

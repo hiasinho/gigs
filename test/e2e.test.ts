@@ -59,7 +59,7 @@ test("full workflow through the CLI", async () => {
   // Auth is on and GIGS_TOKEN is the admin token: init also writes the project's first token.
   expect(JSON.parse(readFileSync(join(repo, ".gigs.json"), "utf8"))).toEqual({ project: "gig", url: server.url.href });
   expect(JSON.parse(readFileSync(join(repo, ".gigs.local.json"), "utf8"))).toEqual({ token: expect.stringMatching(/^gig_/) });
-  // Idempotent: linking an existing project succeeds.
+  // Idempotent: binding to an existing project succeeds.
   expect(await cliJson(["init", "gig"])).toMatchObject({ prefix: "gig", name: "Gigs" });
   const renamed = await cli(["init", "gig", "--name", "Other"]);
   expect(renamed.code).toBe(0);

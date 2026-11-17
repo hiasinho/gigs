@@ -120,6 +120,22 @@ bunDescribe("binding", () => {
   });
 });
 
+bunTest("re-binding without a token drops the old binding's token, and init's project and url win over stale local values", async () => {
+  const d = bind("rebind", { json: { project: "bd", url: server.url.href }, local: { token: bdToken, project: "bd", url: "http://127.0.0.1:1", note: "kept" } });
+  // A project token for ot can bind to ot but mints no token, so none is written.
+  expect((await cli(["init", "ot"], d, { GIGS_URL: server.url.href, GIGS_TOKEN: otToken })).code).toBe(0);
+  expect(readJson(join(d, ".gigs.json"))).toEqual({ project: "ot", url: server.url.href });
+  expect(readJson(join(d, ".gigs.local.json"))).toEqual({ note: "kept" });
+});
+
+bunTest("a malformed binding file names itself", async () => {
+  const d = bind("malformed", { json: { project: "bd" } });
+  writeFileSync(join(d, ".gigs.local.json"), "{oops");
+  const r = await cli(["ready"], d);
+  expect(r.code).toBe(1);
+  expect(r.stderr).toStartWith(`error: ${join(d, ".gigs.local.json")}: invalid JSON`);
+});
+
 function readJson(file: string) {
   return JSON.parse(readFileSync(file, "utf8"));
 }
