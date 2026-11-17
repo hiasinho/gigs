@@ -1,0 +1,4 @@
+#!/bin/sh
+# Refuse commits whose staged changes contain a secret (gitleaks, with .gitleaks.toml's gig_ rule).
+# Enable once per clone: git config core.hooksPath .githooks
+exec mise exec gitleaks -- gitleaks git --pre-commit --staged --redact --no-banner --config .gitleaks.toml

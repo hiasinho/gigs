@@ -8,13 +8,20 @@
 // never ship), uploads the module Worker with wrangler.toml's bindings, vars and pending DO
 // migrations (keeping its secrets), turns workers.dev off, and attaches the custom domain(s).
 // --secret also sets GIGS_ADMIN_TOKEN from ~/.config/gigs/admin-token (never printed).
-// Env: CLOUDFLARE_ACCOUNT_ID (default: the strapivo.dev account).
+// Account: CLOUDFLARE_ACCOUNT_ID, else ~/.config/gigs/cloudflare-account-id.
 import { mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import config from "../wrangler.toml";
 
-const ACCOUNT = process.env.CLOUDFLARE_ACCOUNT_ID || "d6c91eff4c3c2669df1f3bc31bd43c3e";
+const ACCOUNT = process.env.CLOUDFLARE_ACCOUNT_ID?.trim() || readAccountFile();
+function readAccountFile(): string {
+  try {
+    return readFileSync(join(homedir(), ".config/gigs/cloudflare-account-id"), "utf8").trim();
+  } catch {
+    throw new Error("set CLOUDFLARE_ACCOUNT_ID or write it to ~/.config/gigs/cloudflare-account-id");
+  }
+}
 const root = join(import.meta.dir, "..");
 const tmp = mkdtempSync(join(tmpdir(), "gigs-deploy-"));
 

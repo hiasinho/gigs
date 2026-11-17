@@ -91,8 +91,9 @@ bunx wrangler secret put GIGS_ADMIN_TOKEN
 bun scripts/deploy.ts [--secret]              # without one: the same through the Cloudflare API via Composio
 ```
 
-`scripts/deploy.ts` deploys the committed `HEAD` and, with `--secret`, sets the admin token from
-`~/.config/gigs/admin-token`.
+`scripts/deploy.ts` deploys the committed `HEAD` to the Cloudflare account in
+`CLOUDFLARE_ACCOUNT_ID` (else `~/.config/gigs/cloudflare-account-id`) and, with `--secret`, sets the
+admin token from `~/.config/gigs/admin-token`.
 
 To back up or move a whole database between servers (either kind), with the admin token in
 `GIGS_TOKEN` (a binding's project token is refused) and `GIGS_URL` pointing at the server:
@@ -384,7 +385,15 @@ silently dropping someone else's change. Text starting with `-` needs `--old=<te
 ```sh
 bun install
 bun run check    # tsc --noEmit && bun test && bun run test:do
+git config core.hooksPath .githooks   # once per clone: gitleaks refuses commits containing secrets
 ```
+
+Tokens never go in git: a repo's token lives in `.gigs.local.json` (gitignored). CI runs gitleaks over
+the whole history on every push, with an extra rule for `gig_` tokens (`.gitleaks.toml`).
+
+Licensed MIT ([LICENSE](LICENSE)). The vendored skills in `.agents/skills` other than `gigs` are
+[mattpocock/skills](https://github.com/mattpocock/skills), MIT
+([LICENSE-mattpocock-skills](.agents/skills/LICENSE-mattpocock-skills)).
 
 The store talks SQL through a small synchronous interface ([src/sql.ts](src/sql.ts)) with two adapters:
 bun:sqlite ([src/sql-bun.ts](src/sql-bun.ts), the server's) and a Durable Object's SQLite storage
