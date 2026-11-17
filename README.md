@@ -94,18 +94,28 @@ bun scripts/deploy.ts [--secret]              # without one: the same through th
 `scripts/deploy.ts` deploys the committed `HEAD` and, with `--secret`, sets the admin token from
 `~/.config/gigs/admin-token`.
 
-To move a whole database between servers (either kind), with the admin token: `GET /admin/export`
-returns `{version, tables: {<table>: [rows]}}` (schema version, every row as stored), and
-`POST /admin/import` with that body loads it in one transaction, keeping ids, counters, timestamps
-and claims. Import refuses (409) unless the target has no rows and the same schema version; it
-answers `{version, tables: {<table>: <rows imported>}}`.
+To back up or move a whole database between servers (either kind), with the admin token in
+`GIGS_TOKEN` and `GIGS_URL` pointing at the server:
+
+```sh
+GIGS_URL=<from> GIGS_TOKEN=<admin token> gig admin export > dump.json
+GIGS_URL=<to>   GIGS_TOKEN=<admin token> gig admin import dump.json   # or `-` for stdin
+```
+
+The dump is `{version, tables: {<table>: [rows]}}` (schema version, every row as stored). Import
+loads it in one transaction, keeping ids, counters, timestamps and claims, and prints the rows
+imported per table. It refuses unless the target has no rows and the same schema version. Over
+HTTP these are `GET /admin/export` and `POST /admin/import` (409 for a non-empty target or another
+schema version).
 
 **This setup runs on the hosted server.** Since gig-14 the whole database lives at
 `https://gigs.strapivo.dev`; the local service is stopped and disabled (its unit file and
 `~/.local/share/gigs/gigs.db` are kept as a fallback). The launcher (below) sets `GIGS_DEFAULT_URL` to the
 hosted server, and each repo's binding carries its project token. To fall back to local:
 `systemctl --user start gigs` and run `gig` with `GIGS_URL=http://127.0.0.1:7357` (the local
-database is as of the cutover; move newer data back with export/import).
+database is as of the cutover; to move newer data back, `gig admin export` from the hosted server
+and `gig admin import` into the local server after moving its `gigs.db` aside, since import needs
+an empty database).
 
 ## Installing `gig`
 
