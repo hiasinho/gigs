@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createHandler } from "../src/server";
 import { GigsError, Store } from "../src/store";
 import { bunDescribe, openSql, openStore } from "./harness";
+import { ADMIN_TOKEN, openTestServer } from "./http";
 
 // Spec status: stored state (draft|ready|closed) plus status derived from the spec's gigs.
 
@@ -163,47 +164,31 @@ describe("store", () => {
   });
 });
 
-bunDescribe("http and cli", () => {
-  const store = openStore(join(dir, "http.db"));
-  const server = Bun.serve({ port: 0, fetch: createHandler(store, { adminToken: "t0k" }) });
-  const handle = createHandler(store, { adminToken: "t0k" });
-  afterAll(() => { server.stop(true); store.dispose(); });
+// Runs on Bun and, through the Worker, in workerd (see test/http.ts).
+describe("http", () => {
+  const api = openTestServer();
+  afterAll(() => api.dispose());
 
   function call(method: string, path: string, opts: { body?: unknown; actor?: string } = {}) {
-    const headers: Record<string, string> = { Authorization: "Bearer t0k" };
+    const headers: Record<string, string> = { Authorization: `Bearer ${ADMIN_TOKEN}` };
     if (opts.actor !== undefined) headers["X-Gigs-Actor"] = opts.actor;
-    return handle(new Request(`http://gigs${path}`, { method, headers, body: opts.body === undefined ? undefined : JSON.stringify(opts.body) }));
-  }
-
-  async function cli(args: string[]) {
-    const proc = Bun.spawn([process.execPath, join(import.meta.dir, "../src/cli.ts"), ...args], {
-      cwd: dir,
-      env: { ...process.env, GIGS_URL: server.url.href, GIGS_TOKEN: "t0k", GIG_ACTOR: "agent-1", GIG_PROJECT: "ht" } as Record<string, string>,
-      stdin: "ignore", stdout: "pipe", stderr: "pipe",
-    });
-    const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-    return { stdout, stderr, code };
-  }
-  async function json(args: string[]) {
-    const r = await cli(args);
-    if (r.code !== 0) throw new Error(`gig ${args.join(" ")} failed: ${r.stderr}`);
-    return JSON.parse(r.stdout);
+    return api.fetch(new Request(`http://gigs${path}`, { method, headers, body: opts.body === undefined ? undefined : JSON.stringify(opts.body) }));
   }
 
   test("routes: ready, close and reopen with error codes; list filter by ?all", async () => {
-    store.createProject("hs");
-    const s = store.createSpec("hs", "a", { title: "Agreement", text: "x" });
+    await api.seed("/projects", { prefix: "hs" });
+    const s = await api.seed("/projects/hs/specs", { title: "Agreement", text: "x" }, "a");
     const path = `/specs/${s.id}`;
     for (const action of ["ready", "close", "reopen"]) {
       expect((await call("POST", `${path}/${action}`)).status).toBe(400);
       expect((await call("POST", `/specs/hs-s9/${action}`, { actor: "a", body: { reason: "x" } })).status).toBe(404);
     }
     expect(await (await call("POST", `${path}/ready`, { actor: "a" })).json()).toMatchObject({ state: "ready", status: "ready", version: 1 });
-    const g = store.createGig("hs", "a", { title: "w", spec: s.id });
+    const g = await api.seed("/projects/hs/gigs", { title: "w", spec: s.id }, "a");
     const active = await call("POST", `${path}/close`, { actor: "a", body: { reason: "x" } });
     expect(active.status).toBe(409);
     expect(await active.json()).toEqual({ error: { code: "spec_active", message: `spec ${s.id} has unfinished gigs: ${g.id}; close them or clear their spec (gig update <id> --spec none) first` } });
-    store.close(g.id, "a");
+    expect((await call("POST", `/gigs/${g.id}/close`, { actor: "a", body: {} })).status).toBe(200);
     expect((await call("GET", "/projects/hs/specs")).status).toBe(200);
     expect(await (await call("GET", "/projects/hs/specs")).json()).toEqual([]);
     expect(await (await call("GET", "/projects/hs/specs?all=1")).json()).toMatchObject([{ id: s.id, status: "done" }]);
@@ -225,6 +210,28 @@ bunDescribe("http and cli", () => {
     expect(await notClosed.json()).toEqual({ error: { code: "conflict", message: `spec ${s.id} is not closed` } });
     expect(await (await call("GET", `${path}/history`)).json()).toHaveLength(1);
   });
+});
+
+// Bun-only: drives the CLI against a Bun.serve server.
+bunDescribe("cli", () => {
+  const store = openStore(join(dir, "cli.db"));
+  const server = Bun.serve({ port: 0, fetch: createHandler(store, { adminToken: "t0k" }) });
+  afterAll(() => { server.stop(true); store.dispose(); });
+
+  async function cli(args: string[]) {
+    const proc = Bun.spawn([process.execPath, join(import.meta.dir, "../src/cli.ts"), ...args], {
+      cwd: dir,
+      env: { ...process.env, GIGS_URL: server.url.href, GIGS_TOKEN: "t0k", GIG_ACTOR: "agent-1", GIG_PROJECT: "ht" } as Record<string, string>,
+      stdin: "ignore", stdout: "pipe", stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    return { stdout, stderr, code };
+  }
+  async function json(args: string[]) {
+    const r = await cli(args);
+    if (r.code !== 0) throw new Error(`gig ${args.join(" ")} failed: ${r.stderr}`);
+    return JSON.parse(r.stdout);
+  }
 
   test("cli: compact rows with status, ready/close/reopen, list --all, human output", async () => {
     store.createProject("ht");

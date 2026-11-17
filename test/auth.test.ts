@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { configFromEnv, createHandler } from "../src/server";
 import { Store } from "../src/store";
 import { bunDescribe, bunTest, openSql, openStore } from "./harness";
-import { openApi } from "./http";
+import { ADMIN_TOKEN, openTestServer } from "./http";
 
 const dir = mkdtempSync(join(tmpdir(), "gigs-auth-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -72,15 +72,11 @@ bunDescribe("auth off (no admin token)", () => {
 
 // Runs on Bun and, through the Worker, in workerd (see test/http.ts).
 describe("auth on (admin token)", () => {
-  const api = openApi();
-  const handle = (req: Request) => api.fetch(req);
+  const api = openTestServer();
+  const handle = api.fetch;
   let ab: string, cd: string, a1: { id: string }, c1: { id: string };
   beforeAll(async () => {
-    const seed = async (path: string, body: unknown) => {
-      const res = await call(handle, "POST", path, "adm1n", body);
-      if (res.status !== 201) throw new Error(`seed ${path}: ${res.status} ${await res.text()}`);
-      return (await res.json()) as any;
-    };
+    const seed = api.seed;
     await seed("/projects", { prefix: "ab" });
     await seed("/projects", { prefix: "cd" });
     ab = (await seed("/projects/ab/tokens", {})).token;
@@ -163,9 +159,9 @@ describe("auth on (admin token)", () => {
       expect(((await res.json()) as any).error.code).toBe("forbidden");
     }
     // Nothing leaked through: the other project is unchanged.
-    const other = (await (await call(handle, "GET", `/gigs/${c1.id}`, "adm1n")).json()) as any;
+    const other = (await (await call(handle, "GET", `/gigs/${c1.id}`, ADMIN_TOKEN)).json()) as any;
     expect(other.gig).toMatchObject({ title: "c1", status: "open" });
-    const own = (await (await call(handle, "GET", `/gigs/${a1.id}`, "adm1n")).json()) as any;
+    const own = (await (await call(handle, "GET", `/gigs/${a1.id}`, ADMIN_TOKEN)).json()) as any;
     expect(own.blockers.map((g: { id: string }) => g.id)).toEqual([c1.id]);
   });
 

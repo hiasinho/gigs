@@ -1,24 +1,18 @@
 import { afterAll, expect, test } from "bun:test";
 import { configFromEnv } from "../src/server";
 import { bunTest } from "./harness";
-import { ADMIN_TOKEN, openApi } from "./http";
+import { ADMIN_TOKEN, openTestServer } from "./http";
 
 // Runs on Bun and, through the Worker, in workerd (see test/http.ts).
-const api = openApi();
+const api = openTestServer();
 afterAll(() => api.dispose());
+const seed = api.seed;
 
 function call(method: string, path: string, opts: { body?: string; actor?: string; token?: string | null } = {}) {
   const headers: Record<string, string> = {};
   if (opts.token !== null) headers.Authorization = `Bearer ${opts.token ?? ADMIN_TOKEN}`;
   if (opts.actor !== undefined) headers["X-Gigs-Actor"] = opts.actor;
   return api.fetch(new Request(`http://gigs${path}`, { method, headers, body: opts.body }));
-}
-
-/** Seeds through the API, as the store is out of reach behind the Worker. */
-async function seed<T = any>(path: string, body: unknown = {}, actor = "fixture"): Promise<T> {
-  const res = await call("POST", path, { actor, body: JSON.stringify(body) });
-  if (res.status !== 201) throw new Error(`seed ${path}: ${res.status} ${await res.text()}`);
-  return (await res.json()) as T;
 }
 
 test("health needs no token; everything else does", async () => {

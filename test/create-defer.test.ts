@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createHandler } from "../src/server";
 import { GigsError, Store } from "../src/store";
 import { bunDescribe, openStore } from "./harness";
+import { ADMIN_TOKEN, openTestServer } from "./http";
 
 // Creating a gig already deferred: one atomic operation, so it is never open (and claimable) in between.
 
@@ -83,19 +84,35 @@ describe("create deferred", () => {
   });
 });
 
-bunDescribe("create deferred over HTTP and the CLI", () => {
+// Runs on Bun and, through the Worker, in workerd (see test/http.ts).
+describe("create deferred over HTTP", () => {
+  const api = openTestServer();
+  afterAll(() => api.dispose());
+  const post = (body: unknown) => api.fetch(new Request("http://gigs/projects/ch/gigs", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, "X-Gigs-Actor": "a" },
+    body: JSON.stringify(body),
+  }));
+
+  test("http: defer and defer_until pass through; bad until is a 400", async () => {
+    const until = new Date(Date.now() + 3_600_000).toISOString();
+    await api.seed("/projects", { prefix: "ch" });
+    const r = await post({ title: "report", defer_until: until });
+    expect(r.status).toBe(201);
+    expect(await r.json()).toMatchObject({ status: "deferred", defer_until: until });
+    const bad = await post({ title: "report", defer: true, defer_until: "2000-01-01T00:00:00Z" });
+    expect(bad.status).toBe(400);
+    expect(await bad.json()).toEqual({ error: { code: "bad_request", message: "until must be in the future" } });
+  });
+});
+
+// Bun-only: drives the CLI against a Bun.serve server.
+bunDescribe("create deferred through the CLI", () => {
   const sdir = mkdtempSync(join(tmpdir(), "gigs-create-defer-cli-"));
   const s = openStore(join(sdir, "gigs.db"));
   s.createProject("cd");
   const server = Bun.serve({ port: 0, fetch: createHandler(s, { adminToken: "t0k" }) });
   afterAll(() => { server.stop(true); s.dispose(); rmSync(sdir, { recursive: true, force: true }); });
-
-  const post = (body: unknown) =>
-    fetch(new URL("/projects/cd/gigs", server.url), {
-      method: "POST",
-      headers: { Authorization: "Bearer t0k", "X-Gigs-Actor": "a" },
-      body: JSON.stringify(body),
-    });
 
   async function cli(args: string[]) {
     const proc = Bun.spawn([process.execPath, join(import.meta.dir, "../src/cli.ts"), ...args], {
@@ -106,16 +123,6 @@ bunDescribe("create deferred over HTTP and the CLI", () => {
     const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
     return { stdout, stderr, code };
   }
-
-  test("http: defer and defer_until pass through; bad until is a 400", async () => {
-    const until = new Date(Date.now() + 3_600_000).toISOString();
-    const r = await post({ title: "report", defer_until: until });
-    expect(r.status).toBe(201);
-    expect(await r.json()).toMatchObject({ status: "deferred", defer_until: until });
-    const bad = await post({ title: "report", defer: true, defer_until: "2000-01-01T00:00:00Z" });
-    expect(bad.status).toBe(400);
-    expect(await bad.json()).toEqual({ error: { code: "bad_request", message: "until must be in the future" } });
-  });
 
   test("cli: --until implies --defer; --defer alone; neither is claimable", async () => {
     const before = Date.now();
