@@ -3,3 +3,5 @@ node_modules/
 *.db-*
 dist/
 .wrangler/
+.envrc
+.gigs.local.json

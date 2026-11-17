@@ -11,7 +11,7 @@ A single unit of tracked work. Every gig belongs to exactly one project.
 _Avoid_: Ticket, issue, bead
 
 **Project**:
-A body of work, usually one repository, whose gigs are tracked together.
+The gigs of one repository, tracked together. Each repository that uses Gigs has exactly one project, and each project belongs to exactly one repository.
 _Avoid_: Repo, workspace, board
 
 **Prefix**:
@@ -28,9 +28,17 @@ How urgent a gig is, from 0 (critical) to 4 (backlog).
 The name an agent or human acts under. Every claim, close, and comment records its actor.
 _Avoid_: User, assignee, owner
 
+**Server**:
+One running Gigs with its own set of projects, gigs and tokens, which actors reach over the network. Each project lives on exactly one server; auth is on or off for a whole server.
+_Avoid_: Instance, backend, host
+
 **Project token**:
 A secret that lets whoever holds it read and write one project, and nothing else, while auth is on. It says which project, not which actor.
 _Avoid_: API key, password
+
+**Binding**:
+The settings in a directory that tie it and everything below it to one project on one server, and may carry the project token. The nearest binding up the directory tree applies. A project can have any number of bindings, and its server knows none of them.
+_Avoid_: Repo config, project config, link, workspace
 
 **Admin token**:
 The server's one secret that can do everything, including creating projects and managing project tokens. Configuring it turns auth on for the whole server; without it there is no auth.
@@ -40,7 +48,7 @@ A note an actor adds to a gig over time, such as progress or a handoff.
 _Avoid_: Note, message
 
 **Label**:
-A free-form marker on a gig, such as `wontfix` or `triage:needs-info`, written in lowercase without spaces. A gig has any number of labels, closed or not. Labels are inert: they never change whether a gig is ready, blocked, or claimable; they only help to find gigs.
+A free-form marker on a gig, such as `wontfix` or `needs-info`, written in lowercase without spaces. A gig has any number of labels, closed or not. Labels are inert: they never change whether a gig is ready, blocked, or claimable; they only help to find gigs.
 _Avoid_: Tag, category
 
 ### Status
