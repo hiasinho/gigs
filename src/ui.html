@@ -18,6 +18,8 @@
   .deferred, .draft { color: #a855f7; }
   .open { color: #ca8a04; }
   .closed, .done { color: #888; }
+  summary { cursor: pointer; margin: 1.5em 0 .3em; }
+  summary h2 { display: inline; }
   pre { white-space: pre-wrap; margin: .3em 0 1em; }
   nav button { float: right; }
   button, input { font: inherit; }
@@ -75,10 +77,16 @@ function gigGroups(gigs, ready) {
   const groups = { in_progress: [], ready: [], blocked: [], deferred: [], closed: [] };
   for (const g of gigs) groups[g.status === "open" ? (readyIds.has(g.id) ? "ready" : "blocked") : g.status].push(g);
   groups.closed.sort((a, b) => (b.closed_at ?? "").localeCompare(a.closed_at ?? ""));
-  return Object.entries(groups).filter(([, gs]) => gs.length).map(([name, gs]) =>
-    `<h2>${st(name)} (${gs.length})</h2><ul>` +
-    gs.map((g) => `<li>${link(g)} <span class="dim">p${g.priority} ${g.type}${g.human ? " human" : ""}${g.claimed_by ? " @" + esc(g.claimed_by) : ""}${g.labels?.length ? " #" + g.labels.map(esc).join(" #") : ""}</span></li>`).join("") +
-    "</ul>").join("") || "<p class=dim>no gigs</p>";
+  return Object.entries(groups).filter(([, gs]) => gs.length).map(([name, gs]) => {
+    const head = `<h2>${st(name)} (${gs.length})</h2>`;
+    const list = "<ul>" +
+      gs.map((g) => `<li>${link(g)} <span class="dim">p${g.priority} ${g.type}${g.human ? " human" : ""}${g.claimed_by ? " @" + esc(g.claimed_by) : ""}${g.labels?.length ? " #" + g.labels.map(esc).join(" #") : ""}</span></li>`).join("") +
+      "</ul>";
+    // Closed gigs pile up: collapsed by default; remember if opened, since the page re-renders on hashchange and focus.
+    if (name !== "closed") return head + list;
+    const open = localStorage.getItem("gigs-closed-open") ? " open" : "";
+    return `<details${open} ontoggle="localStorage[this.open ? 'setItem' : 'removeItem']('gigs-closed-open', '1')"><summary>${head}</summary>${list}</details>`;
+  }).join("") || "<p class=dim>no gigs</p>";
 }
 
 async function gig(id) {
