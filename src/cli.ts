@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { BINDING_FILE, type Binding, connection, findBinding, readBinding, tokenHint, writeBinding } from "./binding";
+import { type ActorSource, BINDING_FILE, type Binding, connection, findBinding, readBinding, resolveActor, tokenHint, writeBinding } from "./binding";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { Client, type GigChangesInput } from "./client";
 import { configFromEnv, serve } from "./server";
@@ -30,6 +30,8 @@ interface Ctx {
   /** Print JSON: `shape(raw)` by default, the raw API response with --full. */
   print<T>(raw: T, shape?: (raw: T) => unknown): void;
   client(): Client;
+  /** Who this call acts as, and where that came from; resolved on first use (it may run git). */
+  actor(): { actor: string; source: ActorSource };
   /** The server the client talks to. */
   url: string;
   /** The token the client sends, if any. */
@@ -551,6 +553,16 @@ const COMMANDS: Record<string, Command> = {
     },
   },
 
+  whoami: {
+    usage: "whoami",
+    summary: "the actor this call acts as, and its source: --as, GIG_ACTOR, .gigs.local.json (\"actor\"), git (config user.name), USER or default (\"unknown\"); needs no server",
+    async run({ json, print, actor }) {
+      const me = actor();
+      if (json) print(me);
+      else console.log(`${me.actor} (from ${me.source})`);
+    },
+  },
+
   skill: {
     usage: "skill",
     summary: "print the agent skill (SKILL.md) that teaches the gig workflow",
@@ -591,14 +603,16 @@ global options:
   --human            print human-readable text instead of JSON
   --json             optional legacy flag (JSON is already the default)
   --full             raw API JSON; with --human: full show view
-  --as <actor>       act as <actor> (default: $GIG_ACTOR, then $USER)
+  --as <actor>       act as <actor> (default: $GIG_ACTOR, then "actor" in
+                     .gigs.local.json, git config user.name, $USER, "unknown";
+                     see gig whoami)
   -P, --project <p>  project prefix
                      (default: $GIG_PROJECT, then the binding)
   --spec <id>        (create, list, ready, blocked, claim) the project comes
                      from the spec id, overriding -P, $GIG_PROJECT, the binding
 
 binding: the nearest .gigs.json, plus .gigs.local.json next to it (gitignored,
-     holds the token); keys project, url, token
+     holds the token); keys project, url, token, and actor (local file only)
 server and token, first wins: env GIGS_URL / GIGS_TOKEN, .gigs.local.json,
      .gigs.json, GIGS_DEFAULT_URL, http://127.0.0.1:7357`;
 }
@@ -636,7 +650,7 @@ export async function main(argv: string[]) {
   const maxArgs: Record<string, number> = {
     serve: 0, init: 1, projects: 0, list: 0, ready: 0, blocked: 0,
     dep: 3, show: 1, update: 1, claim: 1, unclaim: 1, heartbeat: 1,
-    reopen: 1, defer: 1, undefer: 1, skill: 0,
+    reopen: 1, defer: 1, undefer: 1, skill: 0, whoami: 0,
   };
   if (parsed.positionals.length > (maxArgs[name] ?? Infinity)) {
     throw new Error(`too many arguments (see \`gig ${name} --help\`)`);
@@ -644,6 +658,8 @@ export async function main(argv: string[]) {
 
   const binding = findBinding(process.cwd());
   const conn = connection(process.env, binding);
+  let actor: ReturnType<Ctx["actor"]> | undefined;
+  const resolveOnce = () => (actor ??= resolveActor(values.as as string | undefined, process.env, binding, process.cwd()));
   const ctx: Ctx = {
     args: parsed.positionals,
     url: conn.url,
@@ -656,8 +672,9 @@ export async function main(argv: string[]) {
       new Client({
         url: conn.url,
         token: conn.token,
-        actor: (values.as as string | undefined) || process.env.GIG_ACTOR || process.env.USER || "unknown",
+        actor: () => resolveOnce().actor,
       }),
+    actor: resolveOnce,
     project: () => specProject(values.spec) ?? resolveProject(values.project as string | undefined, binding),
   };
   try {

@@ -7,6 +7,7 @@ description: Gigs ticket system via `gig` CLI. Use when repo has .gigs.json, or 
 Ticket system. Ticket = gig, id like `gig-42`.
 Use for work that outlives this session or others pick up; in-session steps → your own todo list.
 Every call: `gig … --as <you>`. Pick a meaningful name once per session, unique among agents (short suffix helps, e.g. `auth-refactor-3f9a`), reuse it.
+Without `--as`: `GIG_ACTOR`, `"actor"` in `.gigs.local.json`, `git config user.name`, `$USER`. `gig whoami` → `{actor,source}`.
 Output: JSON, empty fields omitted; `--full` = all fields. Syntax: `gig help`, `gig <cmd> --help`.
 
 ## Loop

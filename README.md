@@ -151,8 +151,14 @@ Client environment:
 | `GIGS_URL`         | the binding's `"url"`       | Server to talk to                              |
 | `GIGS_DEFAULT_URL` | `http://127.0.0.1:7357`     | Server when neither env nor binding names one  |
 | `GIGS_TOKEN`       | the binding's `"token"`     | Bearer token (project or admin), if auth is on |
-| `GIG_ACTOR`        | `$USER`                     | Who you act as (also `--as <actor>`)           |
+| `GIG_ACTOR`        | see below                   | Who you act as (also `--as <actor>`)           |
 | `GIG_PROJECT`      | the binding's `"project"`   | Project prefix (also `-P <prefix>`)            |
+
+Actor lookup, first wins: `--as`, `GIG_ACTOR`, `"actor"` in `.gigs.local.json` (per checkout;
+never read from the committed `.gigs.json`), `git config user.name`, `$USER`, then `"unknown"`.
+Blank values fall through. Git only runs when a command writes, so reads spawn no git process.
+`gig whoami` prints the result and where it came from, e.g. `{"actor":"impl-a","source":"GIG_ACTOR"}`
+(sources: `--as`, `GIG_ACTOR`, `.gigs.local.json`, `git`, `USER`, `default`); it needs no server.
 
 Server and token lookup, first wins: environment (`GIGS_URL`, `GIGS_TOKEN`), then
 `.gigs.local.json`, then `.gigs.json`, then `GIGS_DEFAULT_URL`, then the built-in default. When the

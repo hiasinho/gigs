@@ -20,6 +20,8 @@ export interface Binding {
   token?: string;
   /** The file the token came from. */
   tokenFile?: string;
+  /** Who acts here; only ever from `.gigs.local.json`, since a committed name would fit one checkout only. */
+  actor?: string;
 }
 
 /** Where the server and token come from, first wins: env, `.gigs.local.json`, `.gigs.json`, `GIGS_DEFAULT_URL` (set by a launcher), built-in default. */
@@ -43,6 +45,7 @@ export function readBinding(dir: string): Binding | undefined {
     url: pick("url"),
     token,
     tokenFile: token === undefined ? undefined : join(dir, str(local.token) ? LOCAL_FILE : BINDING_FILE),
+    actor: str(local.actor),
   };
 }
 
@@ -96,6 +99,42 @@ export function connection(env: Record<string, string | undefined>, binding: Bin
   const url = env.GIGS_URL || binding?.url || env.GIGS_DEFAULT_URL || BUILTIN_URL;
   if (env.GIGS_TOKEN) return { url, token: env.GIGS_TOKEN, tokenSource: "GIGS_TOKEN" };
   return { url, token: binding?.token, tokenSource: binding?.tokenFile };
+}
+
+export type ActorSource = "--as" | "GIG_ACTOR" | typeof LOCAL_FILE | "git" | "USER" | "default";
+
+/**
+ * Who the CLI acts as, first wins: `--as`, `GIG_ACTOR`, `"actor"` in `.gigs.local.json`,
+ * `git config user.name` (run in `dir`), `$USER`, `"unknown"`. Blank values fall through.
+ */
+export function resolveActor(
+  flag: string | undefined,
+  env: Record<string, string | undefined>,
+  binding: Binding | undefined,
+  dir: string,
+): { actor: string; source: ActorSource } {
+  const steps: [ActorSource, () => string | undefined][] = [
+    ["--as", () => flag],
+    ["GIG_ACTOR", () => env.GIG_ACTOR],
+    [LOCAL_FILE, () => binding?.actor],
+    ["git", () => gitUserName(dir)],
+    ["USER", () => env.USER],
+  ];
+  for (const [source, value] of steps) {
+    const actor = value()?.trim();
+    if (actor) return { actor, source };
+  }
+  return { actor: "unknown", source: "default" };
+}
+
+/** `git config user.name` in `dir`; undefined without git, a repo, or a name. */
+function gitUserName(dir: string): string | undefined {
+  try {
+    const r = Bun.spawnSync(["git", "config", "user.name"], { cwd: dir, stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+    return r.exitCode === 0 ? r.stdout.toString() : undefined;
+  } catch {
+    return undefined; // no git on PATH
+  }
 }
 
 /** Why the server turned the token down: where it came from, and what it overrode. */

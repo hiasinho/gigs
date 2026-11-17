@@ -3,7 +3,8 @@ import { GigsError, type Dump, type ImportResult, type Gig, type GigDetail, type
 export interface ClientOptions {
   url: string;
   token?: string;
-  actor: string;
+  /** Sent on writes only (reads don't need it); a function is called on the first write. */
+  actor: string | (() => string);
 }
 
 export interface NewGigInput {
@@ -235,8 +236,16 @@ export class Client {
     return this.request<Comment>("POST", `/gigs/${enc(id)}/comments`, { body });
   }
 
+  private resolvedActor?: string;
+
+  private actor(): string {
+    const { actor } = this.opts;
+    return (this.resolvedActor ??= typeof actor === "function" ? actor() : actor);
+  }
+
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const headers: Record<string, string> = { "X-Gigs-Actor": this.opts.actor };
+    const headers: Record<string, string> = {};
+    if (method !== "GET" && method !== "HEAD") headers["X-Gigs-Actor"] = this.actor();
     if (this.opts.token) headers.Authorization = `Bearer ${this.opts.token}`;
     if (body !== undefined) headers["Content-Type"] = "application/json";
     let res: Response;
