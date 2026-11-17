@@ -5,6 +5,7 @@ import { type ActorSource, BINDING_FILE, type Binding, connection, findBinding, 
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { Client, type GigChangesInput } from "./client";
 import { configFromEnv, serve } from "./server";
+import { assetName, isCompiled, RELEASES, upgrade, VERSION } from "./upgrade";
 // Embedded (a text import), so `gig skill` works from a compiled binary too.
 import skillText from "../.agents/skills/gigs/SKILL.md" with { type: "text" };
 import { GigsError, formatReasons as reasonText, type Gig, type GigDetail, type GigSummary, type LinkKind, type Project, type Spec, type TextEdit, type Token } from "./store";
@@ -565,6 +566,31 @@ const COMMANDS: Record<string, Command> = {
     },
   },
 
+  version: {
+    usage: "version",
+    summary: "this gig's release tag (\"dev\" when not built from a tag); also `gig --version`",
+    async run({ json, print }) {
+      if (json) print({ version: VERSION });
+      else console.log(VERSION);
+    },
+  },
+
+  upgrade: {
+    usage: "upgrade [<tag>] [--check]",
+    summary: `replace this gig binary with the latest release (or <tag>) from ${RELEASES}, verified against its SHA256SUMS; --check only reports. Only for the compiled binary; in a checkout, use git pull`,
+    options: { check: { type: "boolean" } },
+    async run({ args, values, json, print }) {
+      if (!isCompiled()) throw new Error("this gig runs from a checkout, not a release binary: update it with git pull");
+      const result = await upgrade({ current: VERSION, execPath: process.execPath, asset: assetName(), tag: args[0], check: values.check === true });
+      if (json) return print(result);
+      console.log(
+        result.status === "up_to_date" ? `already at ${result.to}`
+          : result.status === "available" ? `${result.to} is available (this is ${result.from}); run gig upgrade`
+          : `upgraded ${result.from} -> ${result.to}`,
+      );
+    },
+  },
+
   skill: {
     usage: "skill",
     summary: "print the agent skill (SKILL.md) that teaches the gig workflow",
@@ -618,6 +644,7 @@ server and token, first wins: env GIGS_URL / GIGS_TOKEN, .gigs.local.json,
 }
 
 export async function main(argv: string[]) {
+  if (argv.length === 1 && argv[0] === "--version") argv = ["version", "--human"]; // plain, like every --version
   const at = findCommand(argv);
   const name = argv[at];
   if (name === undefined || name === "help") {
@@ -650,7 +677,7 @@ export async function main(argv: string[]) {
   const maxArgs: Record<string, number> = {
     serve: 0, init: 1, projects: 0, list: 0, ready: 0, blocked: 0,
     dep: 3, show: 1, update: 1, claim: 1, unclaim: 1, heartbeat: 1,
-    reopen: 1, defer: 1, undefer: 1, skill: 0, whoami: 0,
+    reopen: 1, defer: 1, undefer: 1, skill: 0, whoami: 0, version: 0, upgrade: 1,
   };
   if (parsed.positionals.length > (maxArgs[name] ?? Infinity)) {
     throw new Error(`too many arguments (see \`gig ${name} --help\`)`);

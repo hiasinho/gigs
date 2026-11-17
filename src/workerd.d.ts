@@ -9,3 +9,5 @@ declare module "*.md" {
   const text: string;
   export default text;
 }
+// Baked in by scripts/build.ts --version (bun build --define); undeclared at runtime otherwise.
+declare const GIGS_VERSION: string | undefined;

@@ -25,9 +25,19 @@ bunDescribe("gig as a single binary", () => {
   }
 
   beforeAll(async () => {
-    const build = Bun.spawnSync([process.execPath, join(import.meta.dir, "../scripts/build.ts"), "--out", gig], { stdout: "pipe", stderr: "pipe" });
+    const build = Bun.spawnSync([process.execPath, join(import.meta.dir, "../scripts/build.ts"), "--out", gig, "--version", "v9.9.9"], { stdout: "pipe", stderr: "pipe" });
     if (build.exitCode !== 0) throw new Error(`build failed: ${build.stderr.toString()}`);
   }, 60_000);
+
+  bunTest("the build's --version is baked in; a checkout says dev and refuses to upgrade", async () => {
+    expect((await run(["--version"])).stdout.trim()).toBe("v9.9.9");
+    expect(JSON.parse((await run(["version"])).stdout)).toEqual({ version: "v9.9.9" });
+    const checkout = (args: string[]) => Bun.spawnSync([process.execPath, join(import.meta.dir, "../src/cli.ts"), ...args], { cwd: dir, env: env(), stdout: "pipe", stderr: "pipe" });
+    expect(checkout(["--version"]).stdout.toString().trim()).toBe("dev");
+    const refused = checkout(["upgrade"]);
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stderr.toString()).toContain("git pull");
+  });
 
   bunTest("`gig skill` prints the embedded skill", async () => {
     const { stdout, code } = await run(["skill"]);

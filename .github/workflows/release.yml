@@ -1,0 +1,26 @@
+name: release
+# Push a tag v* to publish the gig binaries (what `gig upgrade` downloads).
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+      - run: bun install --frozen-lockfile
+      - run: bunx tsc --noEmit
+      - run: bun test
+      - name: Build
+        run: |
+          bun scripts/build.ts --all --version "$GITHUB_REF_NAME"
+          cd dist && sha256sum gig-linux-x64 gig-linux-arm64 gig-darwin-x64 gig-darwin-arm64 > SHA256SUMS
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes dist/gig-linux-x64 dist/gig-linux-arm64 dist/gig-darwin-x64 dist/gig-darwin-arm64 dist/SHA256SUMS

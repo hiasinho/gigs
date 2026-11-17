@@ -132,14 +132,26 @@ an empty database).
 
 ### As a single binary
 
-`bun run build` compiles `dist/gig` for this machine: one self-contained executable (about 100 MB,
-the Bun runtime included, with the UI page and the agent skill embedded), so the target machine
-needs no checkout and no Bun. `bun scripts/build.ts --all` cross-compiles
-`dist/gig-{linux,darwin}-{x64,arm64}`. Copy the one you need to the other machine as
-`~/.local/bin/gig`, and `chmod +x` it. To talk to a hosted server by default, set
-`GIGS_DEFAULT_URL` in your shell profile (see below). `gig skill` prints the agent skill; install it with
-`mkdir -p ~/.claude/skills/gigs && gig skill > ~/.claude/skills/gigs/SKILL.md`. The binary is the server too:
-`gig serve`.
+Each release on GitHub (https://github.com/hiasinho/gigs/releases) has one self-contained
+executable per platform (about 100 MB: the Bun runtime included, with the UI page and the agent
+skill embedded), so the machine needs no checkout and no Bun:
+
+```sh
+curl -fL -o ~/.local/bin/gig https://github.com/hiasinho/gigs/releases/latest/download/gig-linux-x64
+chmod +x ~/.local/bin/gig       # also gig-linux-arm64, gig-darwin-x64, gig-darwin-arm64
+gig upgrade                     # later: replace it with the latest release (--check: only report)
+```
+
+`gig version` prints the release tag. `gig upgrade <tag>` installs a given release (also to go
+back); every download is checked against the release's `SHA256SUMS`. To talk to a hosted server by
+default, set `GIGS_DEFAULT_URL` in your shell profile (see below). `gig skill` prints the agent
+skill; install it with `mkdir -p ~/.claude/skills/gigs && gig skill > ~/.claude/skills/gigs/SKILL.md`.
+The binary is the server too: `gig serve`.
+
+Building them: `bun run build` compiles `dist/gig` for this machine, `bun scripts/build.ts --all`
+cross-compiles `dist/gig-{linux,darwin}-{x64,arm64}`, and `--version <tag>` bakes the tag in
+(otherwise it says `dev`). Pushing a tag `v*` makes `.github/workflows/release.yml` test, build and
+publish the release.
 
 ### From a checkout
 
