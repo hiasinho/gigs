@@ -155,6 +155,27 @@ bunTest("init keeps a binding's token for the same project over GIGS_TOKEN, and 
   expect(store.tokenProject(token)).toBe("bd");
 });
 
+bunTest("init replaces a binding's rejected token for the same project with the token in use, never the admin token", async () => {
+  const revoked = store.createToken("bd");
+  store.revokeToken(revoked.id);
+  const fresh = store.createToken("bd").token;
+  for (const [name, stale] of [["init-revoked", revoked.token], ["init-invalid", "nope"], ["init-foreign", otToken]] as const) {
+    const d = bind(name, { json: { project: "bd", url: server.url.href }, local: { token: stale } });
+    expect((await cli(["init", "bd"], d, { GIGS_TOKEN: fresh })).code).toBe(0);
+    expect(readJson(join(d, ".gigs.local.json"))).toEqual({ token: fresh });
+    expect(await cli(["ready"], join(d, "sub"))).toMatchObject({ code: 0, stdout: "[]\n" });
+  }
+
+  // With the admin token, a new project token replaces the rejected one.
+  const a = bind("init-revoked-admin", { json: { project: "bd", url: server.url.href }, local: { token: revoked.token } });
+  const init = await cli(["init", "bd"], a, { GIGS_TOKEN: "adm1n" });
+  expect(JSON.parse(init.stdout)).toMatchObject({ token_id: expect.any(Number) });
+  const { token } = readJson(join(a, ".gigs.local.json"));
+  expect(token).not.toBe("adm1n");
+  expect(store.tokenProject(token)).toBe("bd");
+  expect(await cli(["ready"], a)).toMatchObject({ code: 0, stdout: "[]\n" });
+});
+
 bunTest("a malformed binding file names itself", async () => {
   const d = bind("malformed", { json: { project: "bd" } });
   writeFileSync(join(d, ".gigs.local.json"), "{oops");

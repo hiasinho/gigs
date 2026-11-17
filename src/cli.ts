@@ -59,7 +59,7 @@ const COMMANDS: Record<string, Command> = {
 
   init: {
     usage: "init <prefix> [--name <name>]",
-    summary: "create the project if missing (else just bind to it) and write this directory's binding: ./.gigs.json with the project (and \"url\" unless the server is the built-in default); when the server has auth on, also a project token in ./.gigs.local.json, which a git repo's ./.gitignore then lists: the binding's own if it has one for this project, else a new one if you use the admin token, else your project token (never the admin token)",
+    summary: "create the project if missing (else just bind to it) and write this directory's binding: ./.gigs.json with the project (and \"url\" unless the server is the built-in default); when the server has auth on, also a project token in ./.gigs.local.json, which a git repo's ./.gitignore then lists: the binding's own if the server accepts it for this project, else a new one if you use the admin token, else your project token (never the admin token)",
     options: { name: { type: "string" } },
     async run({ args, values, json, print, client, url, token: callerToken }) {
       const prefix = arg(args, 0, "prefix");
@@ -80,7 +80,10 @@ const COMMANDS: Record<string, Command> = {
       const existing = readBinding(process.cwd());
       let token = existing?.project === project.prefix ? existing.token : undefined;
       let minted: Token | undefined;
-      if (!token && (await c.health()).auth) {
+      const auth = (await c.health()).auth;
+      // A saved token the server turns down (revoked, invalid, another project's) is replaced like a missing one.
+      if (auth && token && token !== callerToken && !(await tokenWorks(url, token, project.prefix))) token = undefined;
+      if (!token && auth) {
         try {
           const created = await c.createToken(project.prefix, "init");
           ({ token, ...minted } = created);
@@ -665,6 +668,17 @@ function findCommand(argv: string[]): number {
     else if (!a.startsWith("-")) return i;
   }
   return -1;
+}
+
+/** Whether the server accepts `token` for `project`; other errors (server unreachable) are thrown. */
+async function tokenWorks(url: string, token: string, project: string): Promise<boolean> {
+  try {
+    await new Client({ url, token, actor: "init" }).getProject(project);
+    return true;
+  } catch (err) {
+    if (err instanceof GigsError && (err.status === 401 || err.status === 403)) return false;
+    throw err;
+  }
 }
 
 function resolveProject(flag: string | undefined, binding: Binding | undefined): string {
