@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { BINDING_FILE, type Binding, connection, findBinding, readBinding, tokenHint, writeBinding } from "./binding";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { Client, type GigChangesInput } from "./client";
 import { configFromEnv, serve } from "./server";
@@ -29,6 +30,8 @@ interface Ctx {
   /** Print JSON: `shape(raw)` by default, the raw API response with --full. */
   print<T>(raw: T, shape?: (raw: T) => unknown): void;
   client(): Client;
+  /** The server the client talks to. */
+  url: string;
   project(): string;
 }
 
@@ -54,9 +57,9 @@ const COMMANDS: Record<string, Command> = {
 
   init: {
     usage: "init <prefix> [--name <name>]",
-    summary: "create the project if missing (else just link it) and write ./.gigs.json; when the server has auth on and you use the admin token, also a new project token as \"token\" (kept if ./.gigs.json already has one)",
+    summary: "create the project if missing (else just bind to it) and write this directory's binding: ./.gigs.json with the project (and \"url\" unless the server is the built-in default); when the server has auth on and you use the admin token, also a new project token in ./.gigs.local.json (kept if the binding already has one), which a git repo's ./.gitignore then lists",
     options: { name: { type: "string" } },
-    async run({ args, values, json, print, client }) {
+    async run({ args, values, json, print, client, url }) {
       const prefix = arg(args, 0, "prefix");
       const c = client();
       let project: Project;
@@ -64,7 +67,7 @@ const COMMANDS: Record<string, Command> = {
       try {
         project = await c.createProject(prefix, values.name as string | undefined);
       } catch (err) {
-        // A project token may link its own project but not create one.
+        // A project token may bind to its own project but not create one.
         if (!(err instanceof GigsError && (err.code === "conflict" || err.code === "forbidden"))) throw err;
         project = await c.getProject(prefix);
         created = false;
@@ -72,7 +75,7 @@ const COMMANDS: Record<string, Command> = {
           console.error(`warning: project ${project.prefix} already exists as "${project.name}"; --name ignored`);
         }
       }
-      const existing = readConfig(".gigs.json");
+      const existing = readBinding(process.cwd());
       let token = existing?.project === project.prefix ? existing.token : undefined;
       let minted: Token | undefined;
       if (!token && (await c.health()).auth) {
@@ -84,10 +87,9 @@ const COMMANDS: Record<string, Command> = {
           if (!(err instanceof GigsError && err.code === "forbidden")) throw err;
         }
       }
-      const config = token ? { project: project.prefix, token } : { project: project.prefix };
-      writeFileSync(".gigs.json", JSON.stringify(config, null, 2) + "\n");
+      const written = writeBinding(process.cwd(), { project: project.prefix, url, token });
       if (json) return print(project, (p) => compact({ ...p, token_id: minted?.id }));
-      console.log(`${created ? "created" : "linked existing"} project ${project.prefix} (${project.name}); wrote .gigs.json${minted ? " with a new token (keep it out of public repos)" : ""}`);
+      console.log(`${created ? "created" : "bound existing"} project ${project.prefix} (${project.name}); wrote ${written.join(", ")}${minted ? " (with a new token)" : ""}`);
     },
   },
 
@@ -551,12 +553,14 @@ global options:
   --full             raw API JSON; with --human: full show view
   --as <actor>       act as <actor> (default: $GIG_ACTOR, then $USER)
   -P, --project <p>  project prefix
-                     (default: $GIG_PROJECT, then nearest .gigs.json)
+                     (default: $GIG_PROJECT, then the binding)
   --spec <id>        (create, list, ready, blocked, claim) the project comes
-                     from the spec id, overriding -P, $GIG_PROJECT, .gigs.json
+                     from the spec id, overriding -P, $GIG_PROJECT, the binding
 
-env: GIGS_URL (default http://127.0.0.1:7357), GIGS_TOKEN (default: "token" in
-     the nearest .gigs.json)`;
+binding: the nearest .gigs.json, plus .gigs.local.json next to it (gitignored,
+     holds the token); keys project, url, token
+server and token, first wins: env GIGS_URL / GIGS_TOKEN, .gigs.local.json,
+     .gigs.json, GIGS_DEFAULT_URL, http://127.0.0.1:7357`;
 }
 
 export async function main(argv: string[]) {
@@ -598,20 +602,30 @@ export async function main(argv: string[]) {
     throw new Error(`too many arguments (see \`gig ${name} --help\`)`);
   }
 
-  await command.run({
+  const binding = findBinding(process.cwd());
+  const conn = connection(process.env, binding);
+  const ctx: Ctx = {
     args: parsed.positionals,
+    url: conn.url,
     values,
     json: values.human !== true,
     full: values.full === true,
     print: (raw, shape) => console.log(JSON.stringify(shape && values.full !== true ? shape(raw) : raw)),
     client: () =>
       new Client({
-        url: process.env.GIGS_URL || "http://127.0.0.1:7357",
-        token: process.env.GIGS_TOKEN || nearestConfig()?.token || undefined,
+        url: conn.url,
+        token: conn.token,
         actor: (values.as as string | undefined) || process.env.GIG_ACTOR || process.env.USER || "unknown",
       }),
-    project: () => specProject(values.spec) ?? resolveProject(values.project as string | undefined),
-  });
+    project: () => specProject(values.spec) ?? resolveProject(values.project as string | undefined, binding),
+  };
+  try {
+    await command.run(ctx);
+  } catch (err) {
+    // A rejected token: say where it came from, since GIGS_TOKEN silently overrides the binding's.
+    if (err instanceof GigsError && (err.status === 401 || err.status === 403)) err.message += ` (${tokenHint(conn, binding)})`;
+    throw err;
+  }
 }
 
 /** Index of the command: the first positional argument, skipping global options and their values. */
@@ -624,30 +638,12 @@ function findCommand(argv: string[]): number {
   return -1;
 }
 
-function resolveProject(flag: string | undefined): string {
+function resolveProject(flag: string | undefined, binding: Binding | undefined): string {
   if (flag) return flag;
   if (process.env.GIG_PROJECT) return process.env.GIG_PROJECT;
-  const found = nearestConfig();
-  if (!found) throw new Error("no project: pass -P <prefix>, set GIG_PROJECT, or run `gig init <prefix>` in your repo");
-  if (typeof found.project !== "string" || !found.project) throw new Error(`${found.file} has no "project"`);
-  return found.project;
-}
-
-interface Config { project?: unknown; token?: string; file: string }
-
-/** The nearest .gigs.json, walking up from the current directory. */
-function nearestConfig(): Config | undefined {
-  for (let dir = process.cwd(); ; dir = dirname(dir)) {
-    const config = readConfig(join(dir, ".gigs.json"));
-    if (config) return config;
-    if (dirname(dir) === dir) return undefined;
-  }
-}
-
-function readConfig(file: string): Config | undefined {
-  if (!existsSync(file)) return undefined;
-  const { project, token } = JSON.parse(readFileSync(file, "utf8"));
-  return { project, token: typeof token === "string" && token ? token : undefined, file };
+  if (!binding) throw new Error("no project: pass -P <prefix>, set GIG_PROJECT, or run `gig init <prefix>` in your repo");
+  if (!binding.project) throw new Error(`${join(binding.dir, BINDING_FILE)} has no "project"`);
+  return binding.project;
 }
 
 /** The project of a spec id like `gig-s3`, or undefined without a spec. */

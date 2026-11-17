@@ -45,7 +45,7 @@ A project can have several tokens (rotate: add a new one, then revoke the old). 
 hashed and shown once, on creation. With the admin token in `GIGS_TOKEN`:
 
 ```sh
-gig init ws --name "Web shop"   # creates ws and writes its first token into .gigs.json
+gig init ws --name "Web shop"   # creates ws and writes its first token into .gigs.local.json
 gig token add --label ci        # prints {id, project, label, created_at, token}; the only time you see it
 gig token list                  # [{id, project, label?, created_at, revoked_at?}], never the token
 gig token revoke 3
@@ -102,8 +102,8 @@ answers `{version, tables: {<table>: <rows imported>}}`.
 
 **This setup runs on the hosted server.** Since gig-14 the whole database lives at
 `https://gigs.strapivo.dev`; the local service is stopped and disabled (its unit file and
-`~/.local/share/gigs/gigs.db` are kept as a fallback). The launcher (below) defaults `GIGS_URL` to the
-hosted server, and each repo's `.gigs.json` carries its project token. To fall back to local:
+`~/.local/share/gigs/gigs.db` are kept as a fallback). The launcher (below) sets `GIGS_DEFAULT_URL` to the
+hosted server, and each repo's binding carries its project token. To fall back to local:
 `systemctl --user start gigs` and run `gig` with `GIGS_URL=http://127.0.0.1:7357` (the local
 database is as of the cutover; move newer data back with export/import).
 
@@ -119,18 +119,26 @@ exec bun "$HOME/src/gigs/src/cli.ts" "$@"
 
 If you manage Bun with mise, pin the version in the launcher instead:
 `exec "$HOME/.local/bin/mise" exec bun@1.4 -- bun "$HOME/src/gigs/src/cli.ts" "$@"`.
-To talk to a hosted server by default, add `export GIGS_URL="${GIGS_URL:-https://gigs.strapivo.dev}"`
-before the `exec` line (an explicit `GIGS_URL` still wins).
-Don't add `-C <checkout>`: `gig` must run in the caller's directory to find its `.gigs.json`.
+To talk to a hosted server by default, add `export GIGS_DEFAULT_URL=https://gigs.strapivo.dev`
+before the `exec` line (a binding's `"url"` and an explicit `GIGS_URL` still win; don't set
+`GIGS_URL` in the launcher, as that would override every binding).
+Don't add `-C <checkout>`: `gig` must run in the caller's directory to find its binding.
 
 Client environment:
 
-| Variable      | Default                         | Meaning                                        |
-| ------------- | ------------------------------- | ---------------------------------------------- |
-| `GIGS_URL`    | `http://127.0.0.1:7357`         | Server to talk to                              |
-| `GIGS_TOKEN`  | `token` in nearest `.gigs.json` | Bearer token (project or admin), if auth is on |
-| `GIG_ACTOR`   | `$USER`                         | Who you act as (also `--as <actor>`)           |
-| `GIG_PROJECT` | nearest `.gigs.json`            | Project prefix (also `-P <prefix>`)            |
+| Variable           | Default                     | Meaning                                        |
+| ------------------ | --------------------------- | ---------------------------------------------- |
+| `GIGS_URL`         | the binding's `"url"`       | Server to talk to                              |
+| `GIGS_DEFAULT_URL` | `http://127.0.0.1:7357`     | Server when neither env nor binding names one  |
+| `GIGS_TOKEN`       | the binding's `"token"`     | Bearer token (project or admin), if auth is on |
+| `GIG_ACTOR`        | `$USER`                     | Who you act as (also `--as <actor>`)           |
+| `GIG_PROJECT`      | the binding's `"project"`   | Project prefix (also `-P <prefix>`)            |
+
+Server and token lookup, first wins: environment (`GIGS_URL`, `GIGS_TOKEN`), then
+`.gigs.local.json`, then `.gigs.json`, then `GIGS_DEFAULT_URL`, then the built-in default. When the
+server rejects a token (401 or 403), the error names where it came from, e.g. `(token from
+GIGS_TOKEN, which overrides /repo/.gigs.local.json)`: a `GIGS_TOKEN` left over from another repo
+overrides this directory's binding.
 
 ## Projects
 
@@ -138,14 +146,18 @@ Each repo maps to a project with a 2–3 character prefix; gig IDs are `<prefix>
 
 ```sh
 cd my-repo
-gig init ws --name "Web shop"   # creates the project if missing, else links it
+gig init ws --name "Web shop"   # creates the project if missing, else binds to it
 ```
 
-This writes `.gigs.json` (`{"project": "ws"}`). Commit it: `gig` finds it by walking up from the
-current directory, so everyone in the repo works on the same project. When auth is on and you run
-`gig init` with the admin token, it also writes a new project token (`"token"`, sent as the bearer
-token unless `GIGS_TOKEN` is set), so every checkout and agent just works; re-running `init` keeps it.
-For a public repo, keep the token out of git and pass it as `GIGS_TOKEN` instead.
+This writes the directory's **binding**: `.gigs.json` (`{"project": "ws", "url": "..."}`; `"url"`
+only when the server isn't the built-in default). Commit it: `gig` finds the nearest one by walking
+up from the current directory, so everyone in the repo works on the same project on the same server.
+When auth is on and you run `gig init` with the admin token, it also writes a new project token to
+`.gigs.local.json` next to it (`{"token": "..."}`) and, in a git repo, adds `.gigs.local.json` to
+`.gitignore`. Every agent shell then just works, with no environment setup (direnv hooks don't run
+in non-interactive shells); re-running `init` keeps the token. Values in `.gigs.local.json`
+override those in `.gigs.json`. An older `.gigs.json` that carries `"token"` itself keeps working;
+re-running `init` moves the token to `.gigs.local.json`.
 
 ## Core concepts
 
