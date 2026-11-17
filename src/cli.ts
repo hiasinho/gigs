@@ -32,6 +32,8 @@ interface Ctx {
   client(): Client;
   /** The server the client talks to. */
   url: string;
+  /** The token the client sends, if any. */
+  token?: string;
   project(): string;
 }
 
@@ -57,9 +59,9 @@ const COMMANDS: Record<string, Command> = {
 
   init: {
     usage: "init <prefix> [--name <name>]",
-    summary: "create the project if missing (else just bind to it) and write this directory's binding: ./.gigs.json with the project (and \"url\" unless the server is the built-in default); when the server has auth on and you use the admin token, also a new project token in ./.gigs.local.json (kept if the binding already has one), which a git repo's ./.gitignore then lists",
+    summary: "create the project if missing (else just bind to it) and write this directory's binding: ./.gigs.json with the project (and \"url\" unless the server is the built-in default); when the server has auth on, also a project token in ./.gigs.local.json, which a git repo's ./.gitignore then lists: the binding's own if it has one for this project, else a new one if you use the admin token, else your project token (never the admin token)",
     options: { name: { type: "string" } },
-    async run({ args, values, json, print, client, url }) {
+    async run({ args, values, json, print, client, url, token: callerToken }) {
       const prefix = arg(args, 0, "prefix");
       const c = client();
       let project: Project;
@@ -83,8 +85,9 @@ const COMMANDS: Record<string, Command> = {
           const created = await c.createToken(project.prefix, "init");
           ({ token, ...minted } = created);
         } catch (err) {
-          // A project token cannot mint tokens; the caller already has one.
+          // A project token cannot mint tokens. It got this far, so it is this project's: save it.
           if (!(err instanceof GigsError && err.code === "forbidden")) throw err;
+          token = callerToken;
         }
       }
       const written = writeBinding(process.cwd(), { project: project.prefix, url, token });
@@ -607,6 +610,7 @@ export async function main(argv: string[]) {
   const ctx: Ctx = {
     args: parsed.positionals,
     url: conn.url,
+    token: conn.token,
     values,
     json: values.human !== true,
     full: values.full === true,
