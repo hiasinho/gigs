@@ -156,9 +156,9 @@ When auth is on, it also writes a project token to `.gigs.local.json` next to it
 and, in a git repo, adds `.gigs.local.json` to `.gitignore`: a new token when you run `gig init`
 with the admin token, or your own project token when that's what `GIGS_TOKEN` holds. The admin
 token is never written. Every agent shell then just works, with no environment setup (direnv hooks
-don't run in non-interactive shells); re-running `init` keeps the binding's token for that project. Values in `.gigs.local.json`
-override those in `.gigs.json`. An older `.gigs.json` that carries `"token"` itself keeps working;
-re-running `init` moves the token to `.gigs.local.json`.
+don't run in non-interactive shells); re-running `init` keeps the binding's token for that
+project. Values in `.gigs.local.json` override those in `.gigs.json`. An older `.gigs.json` that
+carries `"token"` itself keeps working; re-running `init` moves the token to `.gigs.local.json`.
 
 ## Core concepts
 
