@@ -69,8 +69,10 @@ async function route(store: Store, req: Request, adminToken: string | undefined,
   const shape = parts.map((s, i) => (i === 1 ? ":" : s)).join("/");
   const key = `${req.method} /${shape}`;
   const param = parts[1] ?? "";
-  if (parts[0] === "admin" || parts[0] === "tokens" || (parts[0] === "projects" && (parts.length === 1 || parts[2] === "tokens"))) adminOnly();
-  else if (parts[0] === "projects" || parts[0] === "gigs" || parts[0] === "specs") own(param);
+  // `GET /projects` is open to project tokens: they see only their own project (below).
+  const listProjects = key === "GET /projects";
+  if (parts[0] === "admin" || parts[0] === "tokens" || (parts[0] === "projects" && ((parts.length === 1 && !listProjects) || parts[2] === "tokens"))) adminOnly();
+  else if (!listProjects && (parts[0] === "projects" || parts[0] === "gigs" || parts[0] === "specs")) own(param);
 
   // Moving the whole database to another server (see Store.exportDump).
   if (req.method === "GET" && url.pathname === "/admin/export") return store.exportDump();
@@ -89,7 +91,7 @@ async function route(store: Store, req: Request, adminToken: string | undefined,
 
   switch (key) {
     case "GET /projects":
-      return store.listProjects();
+      return scope === null ? store.listProjects() : [store.getProject(scope)];
     case "POST /projects": {
       const body = await readBody(req);
       return json(store.createProject(body.prefix, body.name), 201);

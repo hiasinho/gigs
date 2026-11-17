@@ -26,7 +26,18 @@ describe("worker entry", () => {
     const token = (await (await call("POST", "/projects/wk/tokens", ADMIN, {})).json() as { token: string }).token;
     expect((await call("POST", "/projects/wk/gigs", token, { title: "hello" })).status).toBe(201);
     expect(await (await call("GET", "/projects/wk/gigs", token)).json()).toMatchObject([{ id: "wk-1", title: "hello" }]);
-    expect((await call("GET", "/projects", token)).status).toBe(403);
+  });
+
+  test("a project token lists only its own project; creating projects and tokens stays admin-only", async () => {
+    for (const prefix of ["pa", "pb"]) expect((await call("POST", "/projects", ADMIN, { prefix })).status).toBe(201);
+    const token = (await (await call("POST", "/projects/pb/tokens", ADMIN, {})).json() as { token: string }).token;
+    const prefixes = async (t: string) => (await (await call("GET", "/projects", t)).json() as { prefix: string }[]).map((p) => p.prefix);
+    expect(await prefixes(ADMIN)).toEqual(expect.arrayContaining(["pa", "pb", "wk"]));
+    expect(await prefixes(token)).toEqual(["pb"]);
+    expect((await call("POST", "/projects", token, { prefix: "zz" })).status).toBe(403);
+    expect((await call("POST", "/projects/pb/tokens", token, {})).status).toBe(403);
+    expect((await call("GET", "/projects/pb/tokens", token)).status).toBe(403);
+    expect((await call("POST", "/tokens/1/revoke", token)).status).toBe(403);
   });
 
   test("admin export and import, without the DO's own tables", async () => {

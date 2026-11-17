@@ -36,8 +36,10 @@ Auth is one switch for the whole server, never per project:
   `Authorization: Bearer <token>`. The admin token can do everything. A **project token** reads and
   writes its own project only: every gig, spec, comment, label, dep and claim call, including ids in
   the body or query (`--parent`, `--blocked-by`, `--spec`, link targets, ...), must stay inside it,
-  else `403 forbidden`. Related gigs in other projects show only their id. Listing and creating
-  projects and managing tokens need the admin token. `GET /health` says `{"ok":true,"auth":true}`.
+  else `403 forbidden`. Related gigs in other projects show only their id. Listing projects with a
+  project token returns just its own project. Creating projects and managing tokens need the admin
+  token. `GET /health` says `{"ok":true,"auth":true}`. The UI page asks for a token with a sign-in
+  form and keeps it in the browser until you sign out.
 
 A project can have several tokens (rotate: add a new one, then revoke the old). They are stored
 hashed and shown once, on creation. With the admin token in `GIGS_TOKEN`:

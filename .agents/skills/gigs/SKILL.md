@@ -82,7 +82,7 @@ gig unclaim <your-id>                                  # ready again once the hu
 ## Auth
 Off unless the server has an admin token. On: `gig` sends `GIGS_TOKEN`, else `"token"` from `.gigs.json`.
 A project token covers its own project only; gigs elsewhere show as `{id}`. Don't create, revoke or paste tokens unless the user asks.
-Admin token only: `gig token add [--label x]` (shown once) · `gig token list` · `gig token revoke <id>` · `gig projects`.
+Admin token only: `gig token add [--label x]` (shown once) · `gig token list` · `gig token revoke <id>`. `gig projects` with a project token lists just its project.
 
 ## Trouble
 - unreachable: server down or wrong `GIGS_URL`; tell the user.

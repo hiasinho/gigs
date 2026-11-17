@@ -100,6 +100,14 @@ bunDescribe("auth on (admin token)", () => {
     expect(detail.blockers).toEqual([{ id: c1.id, title: "c1", status: "open", type: "task", priority: 2 }]);
   });
 
+  test("listing projects: the admin token sees all, a project token only its own", async () => {
+    const names = async (token: string) => ((await (await call(handle, "GET", "/projects", token)).json()) as any[]).map((p) => p.prefix);
+    expect(await names("adm1n")).toEqual(["ab", "cd"]);
+    expect(await names(ab)).toEqual(["ab"]);
+    expect(await names(cd)).toEqual(["cd"]);
+    expect((await call(handle, "GET", "/projects", "wrong")).status).toBe(401);
+  });
+
   test("a project token reads and writes its own project", async () => {
     expect((await call(handle, "GET", "/projects/ab", ab)).status).toBe(200);
     expect((await call(handle, "GET", "/projects/AB/gigs", ab)).status).toBe(200);
@@ -136,7 +144,7 @@ bunDescribe("auth on (admin token)", () => {
       ["GET", `/projects/ab/ready?parent=${c1.id}`],
       ["GET", `/projects/ab/gigs?parent=${c1.id}`],
       // Admin only:
-      ["GET", "/projects"], ["POST", "/projects", { prefix: "ef" }],
+      ["POST", "/projects", { prefix: "ef" }],
       ["GET", "/projects/ab/tokens"], ["POST", "/projects/ab/tokens", {}], ["POST", "/tokens/1/revoke"],
     ];
     for (const [method, path, body] of refused) {
@@ -210,9 +218,9 @@ bunDescribe("CLI", () => {
     expect(JSON.parse((await cli(["init", "rp"], { GIGS_TOKEN: "adm1n" })).stdout)).not.toHaveProperty("token_id");
     expect(JSON.parse(readFileSync(join(repo, ".gigs.json"), "utf8")).token).toBe(config.token);
     expect(store.listTokens("rp")).toHaveLength(1);
-    // A project token can link its own existing project, not list all.
+    // A project token can link its own existing project, and lists only that one.
     expect((await cli(["init", "rp"])).code).toBe(0);
-    expect(await cli(["projects"])).toMatchObject({ code: 1, stderr: "error: needs the admin token\n" });
+    expect(JSON.parse((await cli(["projects"])).stdout).map((p: any) => p.prefix)).toEqual(["rp"]);
   });
 
   test("token add, list and revoke", async () => {

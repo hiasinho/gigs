@@ -19,8 +19,11 @@
   .open { color: #ca8a04; }
   .closed, .done { color: #888; }
   pre { white-space: pre-wrap; margin: .3em 0 1em; }
+  nav button { float: right; }
+  button, input { font: inherit; }
+  .err { color: #dc2626; }
 </style>
-<nav><a href="#">gigs</a> <span id="crumb"></span></nav>
+<nav><a href="#">gigs</a> <span id="crumb"></span><button id="signout" hidden>sign out</button></nav>
 <main id="main"></main>
 <script>
 const $ = (s) => document.querySelector(s);
@@ -29,13 +32,11 @@ const link = (g) => `<a href="#g/${esc(g.id)}">${esc(g.id)}</a> ${esc(g.title)}`
 const st = (status) => `<span class="st ${esc(status)}">${esc(String(status).replace("_", " "))}</span>`;
 const ago = (t) => (t ? new Date(t).toLocaleString() : "");
 
-async function api(path) {
-  const token = localStorage.getItem("gigs-token");
+const SIGNED_OUT = "signed out";
+
+async function api(path, token = localStorage.getItem("gigs-token")) {
   const res = await fetch(path, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
-  if (res.status === 401) {
-    const t = prompt("gigs token");
-    if (t) { localStorage.setItem("gigs-token", t); return api(path); }
-  }
+  if (res.status === 401) throw new Error(SIGNED_OUT);
   const body = await res.json();
   if (!res.ok) throw new Error(body.error?.message ?? res.status);
   return body;
@@ -91,7 +92,33 @@ async function gig(id) {
     ${d.comments?.length ? `<h2>comments</h2>${d.comments.map((c) => `<div class=dim>${esc(c.author)} · ${ago(c.created_at)}</div><pre>${esc(c.body)}</pre>`).join("")}` : ""}`;
 }
 
+function signIn(error = "") {
+  $("#signout").hidden = true;
+  $("#main").innerHTML = `<form id="signin"><p>sign in with a gigs token</p>
+    <input id="token" type="password" name="token" placeholder="token" autocomplete="current-password" required autofocus>
+    <button>sign in</button>${error ? `<p class="err">${esc(error)}</p>` : ""}</form>`;
+  $("#signin").onsubmit = async (e) => {
+    e.preventDefault();
+    const token = $("#token").value.trim();
+    try {
+      await api("/projects", token);
+    } catch (err) {
+      return signIn(err.message === SIGNED_OUT ? "token rejected" : err.message);
+    }
+    localStorage.setItem("gigs-token", token);
+    render();
+  };
+  $("#token").focus();
+}
+
+$("#signout").onclick = () => {
+  localStorage.removeItem("gigs-token");
+  if (location.hash) location.hash = ""; // hashchange renders
+  else render();
+};
+
 async function render() {
+  $("#signout").hidden = !localStorage.getItem("gigs-token");
   const [kind, id] = location.hash.slice(1).split("/").map(decodeURIComponent);
   $("#crumb").textContent = kind === "p" ? `/ ${id}` : "";
   try {
@@ -100,11 +127,13 @@ async function render() {
       : kind === "s" ? await spec(encodeURIComponent(id))
       : `<ul>${await projects()}</ul>`;
   } catch (e) {
-    $("#main").innerHTML = `<p>error: ${esc(e.message)}</p>`;
+    if (e.message !== SIGNED_OUT) return ($("#main").innerHTML = `<p>error: ${esc(e.message)}</p>`);
+    localStorage.removeItem("gigs-token");
+    signIn();
   }
 }
 
 addEventListener("hashchange", render);
-addEventListener("focus", render);
+addEventListener("focus", () => $("#signin") || render());
 render();
 </script>
