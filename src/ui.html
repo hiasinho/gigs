@@ -82,10 +82,11 @@ function gigGroups(gigs, ready) {
     const list = "<ul>" +
       gs.map((g) => `<li>${link(g)} <span class="dim">p${g.priority} ${g.type}${g.human ? " human" : ""}${g.claimed_by ? " @" + esc(g.claimed_by) : ""}${g.labels?.length ? " #" + g.labels.map(esc).join(" #") : ""}</span></li>`).join("") +
       "</ul>";
-    // Closed gigs pile up: collapsed by default; remember if opened, since the page re-renders on hashchange and focus.
-    if (name !== "closed") return head + list;
-    const open = localStorage.getItem("gigs-closed-open") ? " open" : "";
-    return `<details${open} ontoggle="localStorage[this.open ? 'setItem' : 'removeItem']('gigs-closed-open', '1')"><summary>${head}</summary>${list}</details>`;
+    // Closed and deferred gigs are out of the way: collapsed by default; remember if opened, since the page re-renders on hashchange and focus.
+    if (name !== "closed" && name !== "deferred") return head + list;
+    const key = `gigs-${name}-open`;
+    const open = localStorage.getItem(key) ? " open" : "";
+    return `<details${open} ontoggle="localStorage[this.open ? 'setItem' : 'removeItem']('${key}', '1')"><summary>${head}</summary>${list}</details>`;
   }).join("") || "<p class=dim>no gigs</p>";
 }
 
