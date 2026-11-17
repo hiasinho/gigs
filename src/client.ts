@@ -1,4 +1,4 @@
-import { GigsError, type Gig, type GigDetail, type Comment, type Project, type Reason, type Spec, type TextEdit, type SpecHistory, type Token } from "./store";
+import { GigsError, type Dump, type ImportResult, type Gig, type GigDetail, type Comment, type Project, type Reason, type Spec, type TextEdit, type SpecHistory, type Token } from "./store";
 
 export interface ClientOptions {
   url: string;
@@ -78,6 +78,16 @@ export class Client {
 
   revokeToken(id: string) {
     return this.request<Token>("POST", `/tokens/${enc(id)}/revoke`);
+  }
+
+  /** Needs the admin token: the whole database. */
+  exportDump() {
+    return this.request<Dump>("GET", "/admin/export");
+  }
+
+  /** Needs the admin token and an empty server at the dump's schema version; answers rows imported per table. */
+  importDump(dump: unknown) {
+    return this.request<ImportResult>("POST", "/admin/import", dump);
   }
 
   listProjects() {

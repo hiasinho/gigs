@@ -123,6 +123,31 @@ const COMMANDS: Record<string, Command> = {
     },
   },
 
+  admin: {
+    usage: "admin export | admin import <file|->",
+    summary: "move a whole database between servers; needs the admin token. `export` writes the dump (always JSON: schema version and every table's rows) to stdout; `import` loads one into the server, which must be empty and at the same schema version, keeping ids, counters, timestamps and claims, and prints the rows imported per table",
+    async run({ args, json, print, client }) {
+      const action = arg(args, 0, "export|import");
+      if (args.length > (action === "import" ? 2 : 1)) throw new Error("too many arguments (see `gig admin --help`)");
+      if (action === "export") {
+        process.stdout.write(`${JSON.stringify(await client().exportDump())}\n`);
+        return;
+      }
+      if (action === "import") {
+        const dump = await readDump(arg(args, 1, "file"));
+        const result = await client().importDump(dump).catch((err) => {
+          // 409: the target has rows or another schema version.
+          if (err instanceof GigsError && err.code === "conflict") err.message = `import refused: ${err.message}`;
+          throw err;
+        });
+        if (json) return print(result);
+        const w = Math.max(0, ...Object.keys(result.tables).map((t) => t.length));
+        return console.log([`imported schema version ${result.version}`, ...Object.entries(result.tables).map(([t, n]) => `  ${t.padEnd(w)}  ${n}`)].join("\n"));
+      }
+      throw new Error("expected `gig admin export|import`");
+    },
+  },
+
   projects: {
     usage: "projects",
     summary: "list projects",
@@ -688,6 +713,15 @@ async function readEdits(rest: string[], values: Record<string, unknown>, comman
   if (rest.length) throw new Error(`too many arguments (see \`gig ${command} --help\`)`);
   if (values.old === undefined || values.new === undefined) throw new Error("pass --old and --new, or - for JSON edits on stdin");
   return [{ old: values.old as string, new: values.new as string }];
+}
+
+/** A dump file for `admin import` (`-`: stdin), parsed; the server checks its shape. */
+async function readDump(file: string): Promise<unknown> {
+  let text: string;
+  try { text = file === "-" ? await Bun.stdin.text() : readFileSync(file, "utf8"); }
+  catch (err) { throw new Error(`cannot read ${file} (${errorMessage(err)})`); }
+  try { return JSON.parse(text); }
+  catch { throw new Error(`${file} is not JSON (expected a dump from \`gig admin export\`)`); }
 }
 
 /** `-` means: read from stdin. */
